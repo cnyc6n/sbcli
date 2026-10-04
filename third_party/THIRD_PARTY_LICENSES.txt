@@ -1,0 +1,11 @@
+本软件包含以下第三方组件：
+
+1. simdjson
+   License: Apache License 2.0
+   Source:  https://github.com/simdjson/simdjson
+   Files:   third_party/simdjson.cpp, third_party/simdjson.h
+
+2. miniz-cpp
+   License: MIT (outer wrapper) + Unlicense (bundled miniz)
+   Source:  https://github.com/tfussell/miniz-cpp
+   Files:   third_party/miniz-zip.hpp

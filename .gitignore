@@ -1,0 +1,23 @@
+# 构建产物
+/build/
+*.exe
+*.obj
+*.o
+*.pdb
+
+# 备份目录（不推送）
+/backup/
+
+# 临时/备份文件（不含任何密钥）
+*.bak
+*.tmp
+/temp/
+
+# 第三方大文件（源码已内置，无需重复）
+# third_party/ 保留（项目依赖内嵌实现）
+
+# 系统/编辑器
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
