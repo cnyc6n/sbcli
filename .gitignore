@@ -8,6 +8,11 @@
 # 备份目录（不推送）
 /backup/
 
+# 测试数据 / 夹具脚本（不推送）
+/fixture_*.sb3
+/test_*.sb3
+/make_fixtures.py
+
 # 临时/备份文件（不含任何密钥）
 *.bak
 *.tmp
