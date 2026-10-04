@@ -8,7 +8,7 @@
 
 namespace sb {
 
-inline constexpr const char* VERSION = "3.0";
+inline constexpr const char* VERSION = "1.1";
 
 class Sb1Error : public std::runtime_error {
 public:

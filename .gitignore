@@ -13,6 +13,11 @@
 /test_*.sb3
 /make_fixtures.py
 
+# 本地测试与文档（仅本地保留，不推送）
+/tests/
+/docs/
+/CHANGELOG.md
+
 # 临时/备份文件（不含任何密钥）
 *.bak
 *.tmp
