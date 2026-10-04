@@ -7,6 +7,9 @@
 JSON 解析基于 [simdjson](https://github.com/simdjson/simdjson)（只读 DOM，
 性能优先），已完全移除对 nlohmann json 的依赖。
 
+除只读查看外，1.1 起还支持**项目级编辑工具链**：把作品拆成可读可写的
+文本项目目录，用文本编辑器改脚本，再打包回 .sb3（见下方「项目级工具链」）。
+
 ## 命令
 
 | 命令     | 作用 |
@@ -27,6 +30,29 @@ JSON 解析基于 [simdjson](https://github.com/simdjson/simdjson)（只读 DOM�
 | `events` | 广播拓扑（谁发、谁收；孤儿广播标注 ⚠） |
 | `diff`   | 版本对比（角色/积木/变量差异；默认折叠摘要，`--detail`/`--by-sprite` 展开明细） |
 | `dup`    | 相似角色检测（复制粘贴拼贴作品：按积木结构 Jaccard 相似度分组，`--limit N` 设阈值 %） |
+
+### 项目级工具链
+
+把作品拆成**可读可写的文本项目目录**（`sbcli project` 格式），
+改完再打包回 .sb3 —— 即「拆开 → 手改 → 装回」的完整闭环。
+
+| 命令     | 作用 |
+|----------|------|
+| `project`| 项目脚手架：`init` / `add-sprite` / `add-costume` / `add-sound` / `add-variable` / `add-list` / `add-broadcast` |
+| `unpack` | 把 .sb3/.sb2 作品拆成 sbcli 项目目录（含素材导出） |
+| `check`  | 检查项目的脚本语法 / 结构 / 引用（四类；`--json` 结构化输出，有错退出码 1） |
+| `fix`    | 发现即声明：把脚本引用到的变量/列表/广播/造型/声音自动登记进 meta（**不改动 block.sbcli**，幂等） |
+| `view`   | 浏览项目：角色清单 + 脚本中文渲染 |
+| `pack`   | 把 sbcli 项目目录重新打包成 .sb3（`sb pack <目录> <输出.sb3>`） |
+| `search` | 语法查找手册：中文概念 / 英文 opcode → 模板 + 参数 + 示例 |
+
+> 项目目录结构：`meta.sbcli`（元数据）+ `character/*/block.sbcli`（手写脚本）+ `assets/`。
+> `block.sbcli` 用缩进的英文 opcode 语法，参数用 SB3 真实字段名
+> （如 `data_setvariableto VARIABLE=分数 VALUE=0`），`(...)`/`<...>` 表示 reporter 嵌套。
+> 只有 `block.sbcli` 需要人写，`meta.sbcli` 交给 `sb fix` 自动维护。
+> `info`/`sprites`/`script`/`vars` 也能**直接读项目目录**（不必先打包）。
+> 示例：`sb unpack 作品.sb3 我的项目` → 手改 `block.sbcli` → `sb check 我的项目`
+> → `sb fix 我的项目` → `sb pack 我的项目 新版.sb3`。
 
 > `refs`/`events`/`diff`/`dup` 支持 Scratch 2/3（1.4 回显提示）。
 > `refs` 过滤参数是**空格分隔多关键词 OR**（`GRID COLUMNS` 命中 GRID/GRID COLUMNS/GRID ROWS）；
@@ -58,6 +84,7 @@ JSON 解析基于 [simdjson](https://github.com/simdjson/simdjson)（只读 DOM�
 --file 关键字       find 只搜文件名包含关键字的作品
 --sort 名字|大小|时间|积木   ls 排序
 --script            find 同时搜索脚本译文
+--threshold N       dup 相似度阈值 %（0-100）
 ```
 
 示例：
@@ -78,6 +105,20 @@ sb diff 旧版.sb3 新版.sb3 --detail   # 展开每个角色的积木明细
 sb dup 作品.sb3                    # 相似角色检测（复制粘贴拼贴）
 sb dup 作品.sb3 --threshold 80      # 阈值调到 80%
 sb dup 作品.sb3 --limit 5           # 每组只显示前 5 条
+```
+
+项目级工具链示例：
+
+```bash
+sb project init 我的项目 打砖块      # 建项目骨架
+sb unpack 作品.sb3 我的项目          # 或直接从作品拆出来
+sb view 我的项目                    # 看角色清单 + 脚本译文
+sb check 我的项目                   # 查语法/结构/引用
+sb check 我的项目 --json            # 结构化输出（有错退出码 1）
+sb fix 我的项目                     # 补齐 meta（不改 block.sbcli）
+sb pack 我的项目 新版.sb3            # 装回 .sb3
+sb search 广播                      # 查语法模板 + 示例
+sb search looks_say --json
 ```
 
 ## 构建
@@ -131,9 +172,18 @@ src/
   squeak*.cpp     Squeak 二进制格式解析
   sb2.cpp         sb2 → sb3 转换
   sb3_*.cpp       sb3 加载 / 渲染 / 汇总 / 命令
+  sbcli_parser.*  block.sbcli 语法解析（AST）
+  sbcli_check.*   项目检查（语法 / 结构 / 引用）
+  sbcli_fix.*     发现即声明（补齐 meta）
+  sbcli_view.*    项目浏览（角色清单 + 脚本渲染）
+  sbcli_project.* 项目脚手架（init / add-*）
+  sbcli_pack.*    项目目录 → .sb3（块链重建 + mutation）
+  sbcli_unpack.*  .sb3/.sb2 → 项目目录
+  sbcli_search.*  语法查找手册
+  sbcli_meta.hpp  项目 meta 读写
   sapi.*          simdjson DOM 访问层
   jdoc.*          Json 值类型（输出与转换用）
 third_party/
   simdjson.h/.cpp 解析引擎（amalgamated）
-  miniz-zip.hpp   zip 读取
+  miniz-zip.hpp   zip 读取（读取 + Writer）
 ```
