@@ -3,6 +3,16 @@
 // 对应 sb.py 的第三部分（检测格式 → 分派到 s1_cmd_* / s3_cmd_*）。
 #include "commands.hpp"
 #include "find_impl.hpp"
+#include "sbcli_check.hpp"
+#include "sbcli_fix.hpp"
+#include "sbcli_view.hpp"
+#include "sbcli_project.hpp"
+#include "sbcli_parser.hpp"
+#include "sbcli_meta.hpp"
+#include "sb3_internal.hpp"
+#include <filesystem>
+#include "sbcli_unpack.hpp"
+#include "sbcli_search.hpp"
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -21,7 +31,24 @@ using json = Json;
 // 格式探测（detect_format）
 // ==========================================================================
 
+static int sbcliCmdInfo(Args& a);
+static int sbcliCmdSprites(Args& a);
+static int sbcliCmdScript(Args& a);
+static int sbcliCmdVars(Args& a);
+
 std::string detectFormat(const std::string& path) {
+    // 目录：若是 sbcli 项目（含 meta.sbcli 或 character/）→ "sbcli"
+    {
+        std::error_code ec;
+        std::string root = std::filesystem::path(path).string();
+        if (std::filesystem::is_directory(root, ec)) {
+            namespace mfs = std::filesystem;
+            if (mfs::exists(mfs::path(root) / "meta.sbcli", ec) ||
+                mfs::exists(mfs::path(root) / "character", ec))
+                return "sbcli";
+            return "dir";
+        }
+    }
     // 用 wide 路径打开读头部（中文路径下 std::ifstream 打不开）
     char head[10] = {0};
     size_t got = 0;
@@ -89,6 +116,7 @@ static std::string padLeft(std::string s, size_t w) {
 
 int cmd_info(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdInfo(a);
     if (fmt == "sb1") return s1_cmd_info(a);
 
     // _info_sb3
@@ -155,6 +183,7 @@ int cmd_info(Args& a) {
 
 int cmd_sprites(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdSprites(a);
     if (fmt == "sb1") return s1_cmd_sprites(a);
     return s3_cmd_sprites(a);
 }
@@ -165,14 +194,147 @@ int cmd_text(Args& a) {
     return s3_cmd_text(a);
 }
 
+// ==========================================================================
+// sbcli 项目目录作为输入：复用 sbcliView（角色清单 + 中文脚本），
+// 让 info/sprites/script/text/vars 等命令也能直接读项目目录。
+// ==========================================================================
+
+// script：项目目录 → 与 sb script 相同风格的中文脚本输出
+static int sbcliCmdScript(Args& a) {
+    ViewReport r = sbcliView(a.file);
+    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+    std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
+    for (const auto& sp : r.sprites) {
+        if (!a.sprite.empty() && sp.id != a.sprite && sp.name != a.sprite) continue;
+        std::cout << "\n═══ " << (sp.isStage ? "舞台" : "角色") << "：" << sp.name
+                  << (sp.isStage ? "（舞台）" : "") << " ═══\n";
+        if (sp.scripts.empty()) { std::cout << "  （没有脚本）\n"; continue; }
+        for (const auto& sc : sp.scripts) {
+            std::cout << "\n  ── @" << sc.hat
+                      << (sc.hatArg.empty() ? "" : " " + sc.hatArg) << " ──\n";
+            for (const auto& l : sc.lines) {
+                std::cout << "  " << std::string((size_t)l.indent * 2, ' ')
+                          << l.text << "\n";
+            }
+        }
+    }
+    return 0;
+}
+
+// sprites：项目目录 → 角色清单（与 sb sprites 风格一致）
+static int sbcliCmdSprites(Args& a) {
+    ViewReport r = sbcliView(a.file);
+    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+    int nSprite = 0, nStage = 0;
+    for (const auto& sp : r.sprites) (sp.isStage ? nStage : nSprite)++;
+    std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
+    std::cout << "共 " << r.sprites.size() << " 个目标：" << nStage << " 个舞台 + "
+              << nSprite << " 个角色\n\n";
+    for (const auto& sp : r.sprites) {
+        std::cout << "[" << (sp.isStage ? "舞台" : "角色") << "] \"" << sp.name << "\"\n";
+        std::cout << "       脚本 " << sp.scriptCount << " · 积木 " << sp.blockCount
+                  << " · 造型 " << sp.costumeCount << " · 声音 " << sp.soundCount << "\n";
+    }
+    return 0;
+}
+
+// info：项目目录概要
+static int sbcliCmdInfo(Args& a) {
+    ViewReport r = sbcliView(a.file);
+    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+    int nSprite = 0, nStage = 0, nScript = 0, nBlock = 0, nCostume = 0, nSound = 0;
+    for (const auto& sp : r.sprites) {
+        (sp.isStage ? nStage : nSprite)++;
+        nScript += sp.scriptCount; nBlock += sp.blockCount;
+        nCostume += sp.costumeCount; nSound += sp.soundCount;
+    }
+    if (a.json) {
+        Json out = Json::object();
+        out["file"] = a.file;
+        out["format"] = "sbcli-project";
+        out["project"] = r.projectName;
+        out["stageCount"] = nStage;
+        out["spriteCount"] = nSprite;
+        out["scriptCount"] = nScript;
+        out["blockCount"] = nBlock;
+        out["costumeCount"] = nCostume;
+        out["soundCount"] = nSound;
+        sb3JsonOut(out);
+        return 0;
+    }
+    std::cout << "文件：" << basename(a.file) << "  （sbcli 项目）\n";
+    if (!r.projectName.empty()) std::cout << "项目名：" << r.projectName << "\n";
+    std::cout << "角色 " << nSprite << " 个 + 舞台 " << nStage << " 个\n";
+    std::cout << "脚本 " << nScript << " · 积木 " << nBlock
+              << " · 造型 " << nCostume << " · 声音 " << nSound << "\n";
+    return 0;
+}
+
 int cmd_script(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdScript(a);
     if (fmt == "sb1") return s1_cmd_script(a);
     return s3_cmd_script(a);
 }
 
+// vars：项目目录 → 从根 meta 与各角色 meta 读变量/列表
+static int sbcliCmdVars(Args& a) {
+    std::string root = sb::meta::findProjectRoot(a.file);
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+    auto load = [&](const std::string& p) { return sb::meta::loadCharMeta(p + "/meta.sbcli"); };
+    sb::meta::CharMeta rm = load(root);
+    std::vector<std::string> chars;
+    {
+        std::error_code ec;
+        std::filesystem::path cd = std::filesystem::u8path(root) / "character";
+        if (std::filesystem::is_directory(cd, ec))
+            for (auto& de : std::filesystem::directory_iterator(cd, ec))
+                if (de.is_directory(ec)) chars.push_back(de.path().filename().string());
+    }
+    std::sort(chars.begin(), chars.end());
+    if (a.json) {
+        Json out = Json::object();
+        out["file"] = a.file;
+        out["format"] = "sbcli-project";
+        Json gv = Json::array(), gl = Json::array();
+        for (auto& nm : rm.variables) gv.push_back(nm);
+        for (auto& nm : rm.lists)     gl.push_back(nm);
+        out["globalVariables"] = gv;
+        out["globalLists"] = gl;
+        Json sprites = Json::object();
+        for (auto& id : chars) {
+            sb::meta::CharMeta m = load(root + "/character/" + id);
+            Json s = Json::object();
+            Json v = Json::array(), l = Json::array();
+            for (auto& nm : m.variables) v.push_back(nm);
+            for (auto& nm : m.lists)     l.push_back(nm);
+            s["variables"] = v; s["lists"] = l;
+            s["name"] = m.has("name") ? m.get("name") : id;
+            sprites[id] = s;
+        }
+        out["sprites"] = sprites;
+        sb3JsonOut(out);
+        return 0;
+    }
+    std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
+    auto dumpOne = [&](const std::string& where, const sb::meta::CharMeta& m) {
+        if (m.variables.empty() && m.lists.empty()) return;
+        std::cout << "\n【" << where << "】\n";
+        for (auto& nm : m.variables) std::cout << "  变量 " << nm << "\n";
+        for (auto& nm : m.lists)     std::cout << "  列表 " << nm << "\n";
+    };
+    dumpOne("全局（根 meta）", rm);
+    for (auto& id : chars) {
+        sb::meta::CharMeta m = load(root + "/character/" + id);
+        std::string nm = m.has("name") ? m.get("name") : id;
+        dumpOne((id == "stage" ? std::string("舞台") : "角色 " + id + "（" + nm + "）"), m);
+    }
+    return 0;
+}
+
 int cmd_vars(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdVars(a);
     if (fmt == "sb1") return s1_cmd_vars(a);
     return s3_cmd_vars(a);
 }
@@ -246,6 +408,190 @@ int cmd_dup(Args& a) {
         return 2;
     }
     return s3_cmd_dup(a);
+}
+
+// ==========================================================================
+// check —— sbcli 项目目录的静态检查（docs/format.md §5）
+// 用法：sb check <项目目录> [--json]
+// ==========================================================================
+
+int cmd_check(Args& a) {
+    std::string target = a.file.empty() ? a.path : a.file;
+    if (target.empty()) target = ".";
+
+    CheckReport r = sbcliCheck(target);
+    if (!r.error.empty()) {
+        std::cerr << "错误：" << r.error << "\n";
+        return 2;
+    }
+
+    // 按 文件 → 行号 排序输出
+    std::vector<const CheckDiag*> ordered;
+    ordered.reserve(r.diags.size());
+    for (const auto& d : r.diags) ordered.push_back(&d);
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const CheckDiag* x, const CheckDiag* y) {
+                         if (x->file != y->file) return x->file < y->file;
+                         return x->line < y->line;
+                     });
+
+    if (a.json) {
+        Json out = Json::object();
+        out["root"] = r.root;
+        out["checked"] = (long long)r.files.size();
+        Json files = Json::array();
+        for (const auto& f : r.files) files.push_back(f);
+        out["files"] = std::move(files);
+        out["rootMetaFound"] = r.rootMetaFound;
+        Json counts = Json::object();
+        counts["error"] = r.errors;
+        counts["warning"] = r.warnings;
+        out["counts"] = std::move(counts);
+        Json diags = Json::array();
+        for (const CheckDiag* d : ordered) {
+            Json o = Json::object();
+            o["file"] = d->file;
+            o["line"] = d->line;
+            o["col"] = d->col;
+            o["level"] = (d->level == CheckLevel::Error) ? "error" : "warning";
+            o["category"] = d->category;
+            o["code"] = d->code;
+            o["message"] = d->message;
+            diags.push_back(std::move(o));
+        }
+        out["diagnostics"] = std::move(diags);
+        out["ok"] = (r.errors == 0);
+        std::cout << out.dump(2) << "\n";
+        return r.errors ? 1 : 0;
+    }
+
+    // 文本模式
+    std::cout << "检查项目：" << r.root << "\n";
+    if (r.files.empty()) {
+        std::cout << "（没有可检查的 block.sbcli）\n";
+        return 0;
+    }
+    std::cout << "已检查 " << r.files.size() << " 个脚本文件"
+              << (r.rootMetaFound ? "" : "（未找到根 meta.sbcli）") << "\n\n";
+
+    if (r.diags.empty()) {
+        std::cout << "没有发现问题。\n";
+        return 0;
+    }
+
+    std::string curFile;
+    for (const CheckDiag* d : ordered) {
+        if (d->file != curFile) {
+            curFile = d->file;
+            std::cout << curFile << ":\n";
+        }
+        std::cout << "  ";
+        if (d->line > 0) {
+            std::cout << "第 " << d->line << " 行";
+            if (d->col > 0) std::cout << " 列 " << d->col;
+            std::cout << "：";
+        } else {
+            std::cout << "文件级：";
+        }
+        std::cout << (d->level == CheckLevel::Error ? "错误" : "警告")
+                  << " [" << d->category << "/" << d->code << "] "
+                  << d->message << "\n";
+    }
+
+    std::cout << "\n共 " << r.errors << " 个错误、" << r.warnings << " 个警告。\n";
+    if (r.errors > 0) std::cout << "有错误，`sb check` 视为不通过。\n";
+    return r.errors ? 1 : 0;
+}
+
+// ==========================================================================
+// fix —— 发现即声明（docs/format.md §4）
+// 用法：sb fix <项目目录> [--json] [--dry-run]
+//
+// 只写 meta.sbcli，绝不碰 block.sbcli（那是手写源文件，且重建会丢注释）。
+// 结构类问题（procedures_call 缺 ARG 等）只报告，交给人改。
+// ==========================================================================
+
+int cmd_fix(Args& a) {
+    std::string target = a.file.empty() ? a.path : a.file;
+    if (target.empty()) target = ".";
+
+    FixReport r = sbcliFix(target, a.dryRun);
+    if (!r.error.empty()) {
+        std::cerr << "错误：" << r.error << "\n";
+        return 2;
+    }
+
+    std::stable_sort(r.notes.begin(), r.notes.end(),
+                     [](const FixNote& x, const FixNote& y) {
+                         if (x.file != y.file) return x.file < y.file;
+                         return x.line < y.line;
+                     });
+
+    if (a.json) {
+        Json out = Json::object();
+        out["root"] = r.root;
+        out["dryRun"] = r.dryRun;
+        Json files = Json::array();
+        for (const auto& f : r.files) files.push_back(f);
+        out["files"] = std::move(files);
+        Json written = Json::array();
+        for (const auto& w : r.written) written.push_back(w);
+        out["written"] = std::move(written);
+        out["registered"] = r.registered;
+        out["errors"] = r.errors;
+        Json notes = Json::array();
+        for (const auto& n : r.notes) {
+            Json o = Json::object();
+            o["file"] = n.file;
+            o["line"] = n.line;
+            o["level"] = n.level;
+            o["code"] = n.code;
+            o["message"] = n.message;
+            notes.push_back(std::move(o));
+        }
+        out["notes"] = std::move(notes);
+        out["ok"] = (r.errors == 0);
+        std::cout << out.dump(2) << "\n";
+        return r.errors ? 1 : 0;
+    }
+
+    std::cout << "修复项目：" << r.root << (r.dryRun ? "（--dry-run，不写文件）" : "") << "\n";
+    if (r.files.empty()) {
+        std::cout << "（没有可处理的 block.sbcli）\n";
+        return 0;
+    }
+    std::cout << "扫描 " << r.files.size() << " 个脚本文件\n";
+
+    std::string curFile;
+    for (const auto& n : r.notes) {
+        if (n.file != curFile) {
+            curFile = n.file;
+            std::cout << "\n" << curFile << ":\n";
+        }
+        std::cout << "  ";
+        if (n.line > 0) std::cout << "第 " << n.line << " 行：";
+        else            std::cout << "文件级：";
+        const char* lv = (n.level == "error") ? "错误" : (n.level == "warn" ? "警告" : "提示");
+        std::cout << lv << " [" << n.code << "] " << n.message << "\n";
+    }
+    if (r.notes.empty()) std::cout << "\n没有需要登记的新引用。\n";
+
+    std::cout << "\n新登记 " << r.registered << " 项";
+    if (!r.written.empty()) {
+        std::cout << "，写入 " << r.written.size() << " 个 meta：";
+        bool first = true;
+        for (const auto& w : r.written) {
+            if (!first) std::cout << "、";
+            std::cout << w;
+            first = false;
+        }
+    }
+    std::cout << "\n";
+    if (r.errors > 0) {
+        std::cout << "有 " << r.errors << " 个错误需要你处理"
+                  << "（fix 不改动 block.sbcli，也不臆造素材文件）。\n";
+    }
+    return r.errors ? 1 : 0;
 }
 
 // ---- ls：统一扫描（两类都列）----
@@ -487,6 +833,232 @@ int cmd_find(Args& a) {
     if (hits.size() > (size_t)a.limit)
         std::cout << "\n…还有 " << (hits.size() - (size_t)a.limit)
                   << " 处（--limit 调整）\n";
+    return 0;
+}
+
+// ==========================================================================
+// view —— 浏览 sbcli 项目（角色清单 + 脚本中文）
+// 用法：sb view <项目目录> [--json] [--sprite 角色id]
+// ==========================================================================
+
+int cmd_view(Args& a) {
+    std::string target = a.file.empty() ? a.path : a.file;
+    if (target.empty()) target = ".";
+
+    ViewReport r = sbcliView(target);
+    if (!r.error.empty()) {
+        std::cerr << "错误：" << r.error << "\n";
+        return 2;
+    }
+
+    // --sprite 过滤：按 id 或名字
+    std::vector<const ViewSprite*> list;
+    for (const auto& s : r.sprites) list.push_back(&s);
+    if (!a.sprite.empty()) {
+        std::vector<const ViewSprite*> keep;
+        for (const ViewSprite* s : list)
+            if (s->id == a.sprite || s->name == a.sprite) keep.push_back(s);
+        if (keep.empty()) {
+            std::cerr << "错误：没有找到角色「" << a.sprite << "」\n";
+            return 2;
+        }
+        list = keep;
+    }
+
+    if (a.json) {
+        Json out = Json::object();
+        out["root"] = r.root;
+        out["project"] = r.projectName;
+        Json arr = Json::array();
+        for (const ViewSprite* s : list) {
+            Json js = Json::object();
+            js["id"] = s->id;
+            js["name"] = s->name;
+            js["isStage"] = s->isStage;
+            js["path"] = s->path;
+            js["scripts"] = s->scriptCount;
+            js["blocks"] = s->blockCount;
+            js["costumes"] = s->costumeCount;
+            js["sounds"] = s->soundCount;
+            Json scs = Json::array();
+            for (const auto& sc : s->scripts) {
+                Json jsc = Json::object();
+                jsc["hat"] = sc.hat;
+                jsc["hatArg"] = sc.hatArg;
+                jsc["line"] = sc.line;
+                jsc["hatText"] = sc.hatText;
+                Json lines = Json::array();
+                for (const auto& l : sc.lines) {
+                    Json jl = Json::object();
+                    jl["indent"] = l.indent;
+                    jl["text"] = l.text;
+                    jl["opcode"] = l.opcode;
+                    jl["srcLine"] = l.srcLine;
+                    lines.push_back(std::move(jl));
+                }
+                jsc["lines"] = std::move(lines);
+                scs.push_back(std::move(jsc));
+            }
+            js["scriptList"] = std::move(scs);
+            arr.push_back(std::move(js));
+        }
+        out["sprites"] = std::move(arr);
+        std::cout << out.dump(2) << "\n";
+        return 0;
+    }
+
+    // 文本模式
+    std::cout << "项目：" << r.root;
+    if (!r.projectName.empty()) std::cout << "  （" << r.projectName << "）";
+    std::cout << "\n";
+    if (r.sprites.empty()) {
+        std::cout << "（没有找到角色目录）\n";
+        return 0;
+    }
+
+    std::cout << "\n角色 " << list.size() << " 个：\n";
+    for (const ViewSprite* s : list) {
+        std::cout << "  " << (s->isStage ? "[舞台]" : "[角色]")
+                  << " " << s->id
+                  << (s->name != s->id ? "（" + s->name + "）" : "")
+                  << "  脚本 " << s->scriptCount
+                  << " · 积木 " << s->blockCount
+                  << " · 造型 " << s->costumeCount
+                  << " · 声音 " << s->soundCount << "\n";
+        if (!s->hasMeta)  std::cout << "        （无 meta.sbcli）\n";
+        if (!s->hasBlock) std::cout << "        （无 block.sbcli）\n";
+    }
+
+    for (const ViewSprite* s : list) {
+        if (s->scripts.empty()) continue;
+        std::cout << "\n" << std::string(60, '=') << "\n";
+        std::cout << (s->isStage ? "舞台 " : "角色 ") << s->id
+                  << (s->name != s->id ? "（" + s->name + "）" : "") << "\n";
+        std::cout << std::string(60, '=') << "\n";
+        for (const auto& sc : s->scripts) {
+            std::cout << "\n  ◆ " << sc.hatText
+                      << "    @script " << sc.hat
+                      << (sc.hatArg.empty() ? "" : " " + sc.hatArg)
+                      << "  (行 " << sc.line << ")\n";
+            for (const auto& l : sc.lines) {
+                std::cout << "      "
+                          << std::string((size_t)l.indent * 2, ' ')
+                          << l.text << "\n";
+            }
+        }
+    }
+    return 0;
+}
+
+// ==========================================================================
+// project —— 项目脚手架：init / add-sprite / add-costume / add-sound /
+//             add-variable / add-list / add-broadcast
+// 用法：sb project <子命令> <项目目录> [参数...]
+// ==========================================================================
+
+int cmd_project(Args& a) {
+    // 兼容两种调用：
+    //   sb project init <目录> [名字]      → a.file=init, extra=[目录, 名字]
+    //   sb project <目录> init [名字]      → a.file=<目录>, extra=[init, 名字]
+    static const std::set<std::string> SUBS = {
+        "init", "add-sprite", "add-costume", "add-sound",
+        "add-variable", "add-list", "add-broadcast",
+    };
+    std::string sub;
+    std::vector<std::string> rest;
+    std::string proj;
+    if (SUBS.count(a.file)) {
+        sub = a.file;
+        rest = a.extra;                     // extra 全部是参数
+        proj = rest.empty() ? "" : rest[0];
+        if (!proj.empty()) rest.erase(rest.begin());
+    } else {
+        proj = a.file;
+        sub = a.extra.empty() ? "" : a.extra[0];
+        rest.assign(a.extra.begin() + 1, a.extra.end());
+    }
+
+    auto show = [](const ProjResult& r) {
+        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+        for (auto& c : r.created) std::cout << "  ✓ " << c << "\n";
+        for (auto& n : r.notes)   std::cout << "  · " << n << "\n";
+        return 0;
+    };
+
+    if (sub == "init") {
+        return show(sbcliProjectInit(proj, rest.empty() ? "" : rest[0]));
+    } else if (sub == "add-sprite") {
+        if (rest.empty()) { std::cerr << "用法：sb project add-sprite <项目> <名字>\n"; return 2; }
+        return show(sbcliAddSprite(proj, rest[0]));
+    } else if (sub == "add-costume") {
+        if (rest.size() < 3) { std::cerr << "用法：sb project add-costume <项目> <角色> <素材文件> <造型名>\n"; return 2; }
+        return show(sbcliAddCostume(proj, rest[0], rest[1], rest[2]));
+    } else if (sub == "add-sound") {
+        if (rest.size() < 3) { std::cerr << "用法：sb project add-sound <项目> <角色> <素材文件> <声音名>\n"; return 2; }
+        return show(sbcliAddSound(proj, rest[0], rest[1], rest[2]));
+    } else if (sub == "add-variable") {
+        if (rest.size() < 2) { std::cerr << "用法：sb project add-variable <项目> <名字> <初值> [角色]\n"; return 2; }
+        return show(sbcliAddVariable(proj, rest[0], rest[1], rest.size() > 2 ? rest[2] : ""));
+    } else if (sub == "add-list") {
+        if (rest.size() < 2) { std::cerr << "用法：sb project add-list <项目> <名字> <元素...> [角色]\n"; return 2; }
+        std::string items = rest[1];
+        for (size_t i = 2; i + 1 < rest.size(); ++i) items += " " + rest[i];
+        std::string scope = rest.size() >= 3 ? rest[rest.size() - 1] : "";
+        return show(sbcliAddList(proj, rest[0], items, scope));
+    } else if (sub == "add-broadcast") {
+        if (rest.empty()) { std::cerr << "用法：sb project add-broadcast <项目> <名字>\n"; return 2; }
+        return show(sbcliAddBroadcast(proj, rest[0]));
+    } else {
+        std::cerr << "未知 project 子命令：" << sub << "\n"
+                  << "可用：init / add-sprite / add-costume / add-sound /\n"
+                  << "      add-variable / add-list / add-broadcast\n";
+        return 2;
+    }
+}
+
+// ==========================================================================
+// unpack —— 把 .sb3 作品拆成 sbcli 项目目录（pack 的逆操作）
+// 用法：sb unpack <作品.sb3> <输出目录> [--force]
+// ==========================================================================
+
+int cmd_unpack(Args& a) {
+    std::string in = a.file;
+    std::string out;
+    if (!a.extra.empty()) out = a.extra[0];
+    if (out.empty() && !a.path.empty() && a.path != ".") out = a.path;
+    if (in.empty() || out.empty()) {
+        std::cerr << "用法：sb unpack <作品.sb3> <输出目录> [--force]\n";
+        return 2;
+    }
+
+    UnpackResult r = sbcliUnpack(in, out, a.force);
+    if (!r.ok) {
+        std::cerr << "错误：" << r.error << "\n";
+        return 2;
+    }
+
+    if (a.json) {
+        Json js = Json::object();
+        js["outDir"]      = r.outDir;
+        js["project"]     = r.projectName;
+        js["sprites"]     = r.spriteCount;
+        js["scripts"]     = r.scriptCount;
+        js["assets"]      = r.assetCount;
+        js["unknownBlocks"] = r.unknownBlocks;
+        std::cout << js.dump(2) << "\n";
+        return 0;
+    }
+
+    std::cout << "已解包：" << r.outDir << "\n";
+    std::cout << "  项目名：" << r.projectName << "\n";
+    std::cout << "  角色数（不含舞台）：" << r.spriteCount << "\n";
+    std::cout << "  脚本数：" << r.scriptCount << "\n";
+    std::cout << "  导出素材：" << r.assetCount << "\n";
+    if (!r.log.empty()) std::cout << r.log;
+    if (r.unknownBlocks > 0)
+        std::cout << "  注意：有 " << r.unknownBlocks
+                  << " 个未知积木（已原样保留，行前带 # 未知积木 注释）\n";
+    std::cout << "\n下一步：sb check " << r.outDir << "  →  sb view " << r.outDir << "\n";
     return 0;
 }
 

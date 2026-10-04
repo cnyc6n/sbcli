@@ -32,6 +32,16 @@ static void printHelp() {
         "  events    广播拓扑（谁发、谁收）\n"
         "  diff      版本对比（角色/积木/变量差异）\n"
         "  dup       相似角色检测（复制粘贴拼贴识别）\n"
+        "  check     检查 sbcli 项目目录的脚本语法/结构/引用\n"
+        "  fix       发现即声明：把脚本引用到的变量/列表/广播/造型/声音\n"
+        "            自动登记进 meta（不改动 block.sbcli）\n"
+        "  view      浏览 sbcli 项目：角色清单 + 脚本中文渲染\n"
+        "  pack      把 sbcli 项目目录重新打包成 .sb3（sb pack <目录> <输出.sb3>）\n"
+        "  unpack    把 .sb3 作品拆成 sbcli 项目目录（sb unpack <作品.sb3> <输出目录>）\n"
+        "  search    语法查找手册：中文概念/英文 opcode → 模板+参数+示例\n"
+        "            例：sb search 广播 / sb search looks_say --json\n"
+        "  project   项目脚手架：init / add-sprite / add-costume / add-sound /\n"
+        "            add-variable / add-list / add-broadcast\n"
         "\n"
         "通用选项（可放在文件前后任意位置）：\n"
         "  --json    输出 JSON\n"
@@ -48,6 +58,10 @@ static void printHelp() {
         "  sb script 作品.sb3 --json --sprite 角色名\n"
         "  sb find 关键字 --dir 目录 --jobs 8\n"
         "  sb refs 作品.sb3 系统日志     # 只看「系统日志」列表的读写\n"
+        "  sb check 项目目录            # 检查 block.sbcli 的语法/结构/引用\n"
+        "  sb check 项目目录 --json     # 结构化输出，有错误时退出码 1\n"
+        "  sb view 项目目录             # 角色清单 + block.sbcli 的中文脚本\n"
+        "  sb unpack 作品.sb3 目录     # 拆成 sbcli 项目（pack 的逆操作）\n"
         "\n";
 }
 
@@ -89,6 +103,7 @@ int main(int argc, char** argv) {
                 if (i + 1 < args.size()) out = args[++i];
             };
             if (k == "--json")            a.json = true;
+            else if (k == "-h" || k == "--help") { printHelp(); return 0; }
             else if (k == "--strings")    a.strings = true;
             else if (k == "--dialog-only")a.dialogOnly = true;
             else if (k == "--drop-numbers") a.dropNumbers = true;
@@ -98,6 +113,8 @@ int main(int argc, char** argv) {
             else if (k == "--detail")    a.detail = true;
             else if (k == "--regex")     a.regex = true;
             else if (k == "--raw")        a.raw = true;
+            else if (k == "--dry-run")    a.dryRun = true;
+            else if (k == "--force" || k == "-f") a.force = true;
             else if (k == "--info-table") a.infoTable = true;
             else if (k == "--script")     a.script = true;
             else if (k == "--limit") {
@@ -155,6 +172,13 @@ int main(int argc, char** argv) {
         else if (a.cmd == "events")  return cmd_events(a);
         else if (a.cmd == "diff")    return cmd_diff(a);
         else if (a.cmd == "dup")     return cmd_dup(a);
+        else if (a.cmd == "check")   return cmd_check(a);
+        else if (a.cmd == "fix")     return cmd_fix(a);
+        else if (a.cmd == "view")    return cmd_view(a);
+        else if (a.cmd == "search")  return cmd_search(a);
+        else if (a.cmd == "project") return cmd_project(a);
+        else if (a.cmd == "pack")    return cmd_pack(a);
+        else if (a.cmd == "unpack")  return cmd_unpack(a);
         else {
             std::cerr << "未知命令：" << a.cmd << "\n";
             printHelp();

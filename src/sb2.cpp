@@ -1,4 +1,5 @@
 #include "sb2.hpp"
+#include "sb3_tables.hpp"
 #include <cmath>
 #include <map>
 #include <regex>
@@ -32,14 +33,12 @@ public:
     // sb2 opcode → sb3 opcode（refs/events/blocks 统一按 sb3 匹配）
     static const std::map<std::string, std::string>& opMap() {
         static const std::map<std::string, std::string> m = {
+            // ---- 数据 ----
             {"setVar:to:", "data_setvariableto"},
             {"changeVar:by:", "data_changevariableby"},
             {"readVariable", "data_variable"},
             {"showVariable:", "data_showvariable"},
             {"hideVariable:", "data_hidevariable"},
-            {"broadcast:", "event_broadcast"},
-            {"doBroadcastAndWait", "event_broadcastandwait"},
-            {"whenIReceive", "event_whenbroadcastreceived"},
             {"append:toList:", "data_addtolist"},
             {"deleteLine:ofList:", "data_deleteoflist"},
             {"insert:at:ofList:", "data_insertatlist"},
@@ -47,7 +46,138 @@ public:
             {"getLine:ofList:", "data_itemoflist"},
             {"lineCountOfList:", "data_lengthoflist"},
             {"list:contains:", "data_listcontainsitem"},
+            {"showList:", "data_showlist"},
+            {"hideList:", "data_hidelist"},
+            {"contentsOfList:", "data_listcontents"},
+            // ---- 事件 ----
+            {"broadcast:", "event_broadcast"},
+            {"doBroadcastAndWait", "event_broadcastandwait"},
+            {"whenIReceive", "event_whenbroadcastreceived"},
+            {"whenGreenFlag", "event_whenflagclicked"},
+            {"whenKeyPressed", "event_whenkeypressed"},
+            {"whenClicked", "event_whenthisspriteclicked"},
+            {"whenSceneStarts", "event_whenbackdropswitchesto"},
+            {"whenSensorGreaterThan", "event_whengreaterthan"},
+            // ---- 控制 ----
+            {"wait:elapsed:from:", "control_wait"},
+            {"doRepeat", "control_repeat"},
+            {"doForever", "control_forever"},
+            {"doIf", "control_if"},
+            {"doIfElse", "control_if_else"},
+            {"doWaitUntil", "control_wait_until"},
+            {"doUntil", "control_repeat_until"},
+            {"stopScripts", "control_stop"},
+            {"createCloneOf", "control_create_clone_of"},
+            {"whenCloned", "control_start_as_clone"},
+            {"deleteClone", "control_delete_this_clone"},
+            // ---- 动作 ----
+            {"forward:", "motion_movesteps"},
+            {"turnRight:", "motion_turnright"},
+            {"turnLeft:", "motion_turnleft"},
+            {"heading:", "motion_pointindirection"},
+            {"pointTowards:", "motion_pointtowards"},
+            {"gotoX:y:", "motion_gotoxy"},
+            {"gotoSpriteOrMouse:", "motion_goto"},
+            {"glideSecs:toX:y:elapsed:from:", "motion_glidesecstoxy"},
+            {"glideSecs:toX:y:elapsed:from:", "motion_glidesecstoxy"},
+            {"changeXposBy:", "motion_changexby"},
+            {"xpos:", "motion_setx"},
+            {"changeYposBy:", "motion_changeyby"},
+            {"ypos:", "motion_sety"},
+            {"bounceOffEdge", "motion_ifonedgebounce"},
+            {"setRotationStyle", "motion_setrotationstyle"},
+            {"xpos", "motion_xposition"},
+            {"ypos", "motion_yposition"},
+            {"heading", "motion_direction"},
+            // ---- 外观 ----
+            {"say:duration:elapsed:from:", "looks_sayforsecs"},
+            {"say:", "looks_say"},
+            {"think:duration:elapsed:from:", "looks_thinkforsecs"},
+            {"think:", "looks_think"},
+            {"show", "looks_show"},
+            {"hide", "looks_hide"},
+            {"looks_changeeffectby", "looks_changeeffectby"},
+            {"looks_seteffectto", "looks_seteffectto"},
+            {"looks_cleargraphiceffects", "looks_cleargraphiceffects"},
+            {"looks_switchcostumeto", "looks_switchcostumeto"},
+            {"looks_nextcostume", "looks_nextcostume"},
+            {"looks_switchbackdropto", "looks_switchbackdropto"},
+            {"looks_switchbackdroptoandwait", "looks_switchbackdroptoandwait"},
+            {"looks_nextbackdrop", "looks_nextbackdrop"},
+            {"changeSizeBy:", "looks_changesizeby"},
+            {"setSizeTo:", "looks_setsizeto"},
+            {"looks_changegraphicEffectby", "looks_changeeffectby"},
+            {"looks_setgraphicEffectto", "looks_seteffectto"},
+            {"looks_changeLayerTo:", "looks_gotofrontback"},
+            {"looks_goForwardBackwardLayers:", "looks_goforwardbackward"},
+            {"size", "looks_size"},
+            {"costumeIndex", "looks_costumenumbername"},
+            // ---- 声音 ----
+            {"playSound:", "sound_play"},
+            {"doPlaySoundAndWait", "sound_playuntildone"},
+            {"stopAllSounds", "sound_stopallsounds"},
+            {"playDrum", "sound_playdrumforbeats"},
+            {"drum:duration:elapsed:from:", "sound_playdrumforbeats"},
+            {"noteOn:duration:elapsed:from:", "sound_playnote"},
+            {"rest:elapsed:from:", "sound_restforbeats"},
+            {"changeVolumeBy:", "sound_changevolumeby"},
+            {"setVolumeTo:", "sound_setvolumeto"},
+            {"volume", "sound_volume"},
+            {"changeTempoBy:", "sound_changetempoby"},
+            {"setTempoTo:", "sound_settempo"},
+            {"tempo", "sound_tempo"},
+            // ---- 画笔 ----
+            {"clearPenTrails", "pen_clear"},
+            {"stampCostume", "pen_stamp"},
+            {"putPenDown", "pen_penDown"},
+            {"putPenUp", "pen_penUp"},
+            {"penColor:", "pen_setPenColorToColor"},
+            {"changePenHueBy:", "pen_changePenColorParamBy"},
+            {"setPenHueTo:", "pen_setPenColorParamTo"},
+            {"changePenShadeBy:", "pen_changePenColorParamBy"},
+            {"setPenShadeTo:", "pen_setPenColorParamTo"},
+            {"changePenSizeBy:", "pen_changePenSizeBy"},
+            {"penSize:", "pen_setPenSizeTo"},
+            // ---- 侦测 ----
+            {"touching:", "sensing_touchingobject"},
+            {"touchingColor:", "sensing_touchingcolor"},
+            {"color:sees:", "sensing_coloristouchingcolor"},
+            {"distanceTo:", "sensing_distanceto"},
+            {"doAsk", "sensing_askandwait"},
+            {"answer", "sensing_answer"},
+            {"keyPressed:", "sensing_keypressed"},
+            {"mousePressed", "sensing_mousedown"},
+            {"mouseX", "sensing_mousex"},
+            {"mouseY", "sensing_mousey"},
+            {"soundLevel", "sensing_loudness"},
+            {"timer", "sensing_timer"},
+            {"timerReset", "sensing_resettimer"},
+            {"getAttribute:of:", "sensing_of"},
+            {"timeAndDate", "sensing_current"},
+            {"timestamp", "sensing_dayssince2000"},
+            {"getUserName", "sensing_username"},
+            // ---- 运算 ----
+            {"+", "operator_add"},
+            {"-", "operator_subtract"},
+            {"*", "operator_multiply"},
+            {"/", "operator_divide"},
+            {"randomFrom:to:", "operator_random"},
+            {">", "operator_gt"},
+            {"<", "operator_lt"},
+            {"=", "operator_equals"},
+            {"&", "operator_and"},
+            {"|", "operator_or"},
+            {"not", "operator_not"},
+            {"concatenate:with:", "operator_join"},
+            {"letter:of:", "operator_letter_of"},
+            {"stringLength:", "operator_length"},
+            {"%", "operator_mod"},
+            {"rounded", "operator_round"},
+            {"computeFunction:of:", "operator_mathop"},
+            // ---- 自定义积木 ----
             {"getParam", "argument_reporter_string_number"},
+            {"call", "procedures_call"},
+            {"procDef", "procedures_definition"},
         };
         return m;
     }
@@ -165,6 +295,36 @@ public:
                 fld.push_back(name);
                 blocks[bid]["fields"]["BROADCAST_OPTION"] = std::move(fld);
                 dropInput("__1");
+            }
+        }
+        // 通用归一：sb2 的位置参数 __1/__2… → sb3 opcode 的真实参数名。
+        // 依据 SB3_T 模板里的 {占位符} 顺序（如 operator_lt 的 {OPERAND1} {OPERAND2}）。
+        // 各 opcode 特例（广播/变量/列表）已在上方处理并 drop 掉，这里只补剩下的。
+        {
+            auto tmplIt = SB3_T.find(op3);
+            if (tmplIt != SB3_T.end()) {
+                std::vector<std::string> names;
+                const std::string& t = tmplIt->second;
+                for (size_t i = 0; i < t.size(); ++i) {
+                    if (t[i] == '{') {
+                        size_t e = t.find('}', i);
+                        if (e != std::string::npos) {
+                            names.push_back(t.substr(i + 1, e - i - 1));
+                            i = e;
+                        }
+                    }
+                }
+                // 按位置把 __1..__N 映射到 names[0..N-1]（已存在的键跳过）
+                auto inps = blocks[bid]["inputs"];   // 拷贝一份遍历，避免边改边读
+                for (size_t k = 0; k < names.size(); ++k) {
+                    std::string oldKey = "__" + std::to_string(k + 1);
+                    if (!inps.contains(oldKey)) continue;
+                    if (names[k].empty()) continue;
+                    // 该名已存在就不覆盖（避免冲突）
+                    if (blocks[bid]["inputs"].contains(names[k])) continue;
+                    blocks[bid]["inputs"][names[k]] = inps[oldKey];
+                    dropInput(oldKey);
+                }
             }
         }
         // 变量/列表块的字段归一：sb2 的名字在 inputs.__N（[1,[10,"名"]]），

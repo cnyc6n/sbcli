@@ -99,12 +99,43 @@ std::vector<std::string> sb3AssetFile(const Elem& obj, const std::string& kind) 
 
 std::string sb3ResolveEntry(const std::map<std::string, std::string>& lower,
                             const std::vector<std::string>& candidates) {
-    for (auto& c : candidates) {
-        std::string l = c;
+    auto tryKey = [&](const std::string& k) -> std::string {
+        std::string l = k;
         std::transform(l.begin(), l.end(), l.begin(),
                        [](unsigned char ch) { return (char)::tolower(ch); });
         auto it = lower.find(l);
-        if (it != lower.end()) return it->second;
+        return (it != lower.end()) ? it->second : std::string();
+    };
+    // 一级：候选原样精确匹配（含路径）
+    for (auto& c : candidates) {
+        std::string hit = tryKey(c);
+        if (!hit.empty()) return hit;
+    }
+    // 二级：补/去 assets/ 前缀（Scratch 官方 .sb3 布局是 assets/<md5ext>；也有作品放 zip 根）
+    for (auto& c : candidates) {
+        if (c.rfind("assets/", 0) != 0) {
+            std::string hit = tryKey("assets/" + c);
+            if (!hit.empty()) return hit;
+        } else {
+            std::string hit = tryKey(c.substr(7));
+            if (!hit.empty()) return hit;
+        }
+    }
+    // 三级：basename 兜底（容忍任意子目录）
+    for (auto& c : candidates) {
+        std::string base = c;
+        size_t sl = base.find_last_of("/\\");
+        if (sl != std::string::npos) base = base.substr(sl + 1);
+        if (base.empty()) continue;
+        std::string bl = base;
+        std::transform(bl.begin(), bl.end(), bl.begin(),
+                       [](unsigned char ch) { return (char)::tolower(ch); });
+        for (auto& kv : lower) {
+            std::string name = kv.first;
+            size_t s2 = name.find_last_of("/\\");
+            if (s2 != std::string::npos) name = name.substr(s2 + 1);
+            if (name == bl) return kv.second;
+        }
     }
     return "";
 }

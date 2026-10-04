@@ -153,4 +153,31 @@ private:
     bool   m_open  = false;
 };
 
+// 内存堆 zip 写入：逐个 add() 条目，finalize() 一次性生成并写盘。
+// 与 Reader 对称——实现也放在 miniz_impl.cpp（唯一编译进 miniz 实现的 TU）。
+class Writer {
+public:
+    Writer();
+    ~Writer();
+
+    Writer(const Writer&) = delete;
+    Writer& operator=(const Writer&) = delete;
+
+    // 写入一个 zip 条目（name 用 UTF-8；内部会打 UTF-8 文件名标志位）
+    bool add(const std::string& name, const std::string& data);
+    bool add(const std::string& name, const void* data, size_t n);
+
+    // 收尾：生成 .zip 字节并写盘；成功返回 true
+    bool finalize(const std::string& path);
+
+    bool ok() const { return m_ok; }
+
+private:
+    mz_zip_archive m_zip{};
+    void*          m_out     = nullptr;   // heap 归档缓冲（finalize 后由 mz_free 释放）
+    size_t         m_outSize = 0;
+    bool           m_ok      = false;
+    bool           m_done    = false;
+};
+
 } // namespace mzip

@@ -3,6 +3,7 @@
 // 其它文件包含 miniz-zip.hpp 时会自动走 header-only 模式（见 common.hpp）。
 #include <cstring>
 #include "miniz-zip.hpp"
+#include "zip.hpp"        // Writer 类声明（m_zip/m_out 成员）+ common.hpp（writeFileBinary）
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -104,6 +105,49 @@ void* mzip_new_file_handle(void) { return new mzip::detail::FileHandle(); }
 void  mzip_free_file_handle(void* p) { delete static_cast<mzip::detail::FileHandle*>(p); }
 bool  mzip_file_handle_open(void* p, const char* utf8path) {
     return static_cast<mzip::detail::FileHandle*>(p)->open(utf8path);
+}
+
+} // namespace mzip
+
+namespace mzip {
+
+// ---- 内存堆 zip 写入（pack 用；与 Reader 对称地放在这个 TU 里）----
+Writer::Writer() {
+    std::memset(&m_zip, 0, sizeof(m_zip));
+    // 预留 256KB 初始堆，避免小文件反复 realloc
+    if (!mz_zip_writer_init_heap(&m_zip, 256 * 1024, 256 * 1024)) {
+        m_ok = false;
+        throw ZipError("初始化 zip 写入器失败");
+    }
+    m_ok = true;
+}
+
+Writer::~Writer() {
+    if (!m_done) mz_zip_writer_end(&m_zip);
+    if (m_out) { mz_free(m_out); m_out = nullptr; }
+}
+
+bool Writer::add(const std::string& name, const std::string& data) {
+    return add(name, data.data(), data.size());
+}
+
+bool Writer::add(const std::string& name, const void* data, size_t n) {
+    if (!m_ok || m_done) return false;
+    // 入口名一律 ASCII（project.json / 资源基名），UTF-8 内容在 project.json 文本内部，
+    // 因此用默认压缩级别即可（本 miniz 版本未定义 UTF-8 文件名标志位）。
+    return mz_zip_writer_add_mem(&m_zip, name.c_str(), data, n, MZ_DEFAULT_LEVEL) != 0;
+}
+
+bool Writer::finalize(const std::string& path) {
+    if (!m_ok || m_done) return false;
+    if (!mz_zip_writer_finalize_heap_archive(&m_zip, &m_out, &m_outSize)) {
+        m_ok = false;
+        return false;
+    }
+    m_done = true;
+    mz_zip_writer_end(&m_zip);
+    sb::writeFileBinary(path, static_cast<const uint8_t*>(m_out), m_outSize);
+    return true;
 }
 
 } // namespace mzip
