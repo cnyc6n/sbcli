@@ -2,6 +2,7 @@
 // 唯一把 miniz 实现编译进来的翻译单元。
 // 其它文件包含 miniz-zip.hpp 时会自动走 header-only 模式（见 common.hpp）。
 #include <cstring>
+#include <fstream>
 #include "miniz-zip.hpp"
 #include "zip.hpp"        // Writer 类声明（m_zip/m_out 成员）+ common.hpp（writeFileBinary）
 #ifdef _WIN32
@@ -23,11 +24,20 @@ namespace mzip {
 namespace detail {
 
 struct FileHandle {
+#ifdef _WIN32
     HANDLE h = INVALID_HANDLE_VALUE;
     LARGE_INTEGER size{};
+#else
+    std::ifstream in;                 // Linux/macOS：普通文件流（路径即 UTF-8 字节）
+    std::streamoff size = 0;
+#endif
 
     FileHandle() = default;
-    ~FileHandle() { if (h != INVALID_HANDLE_VALUE) ::CloseHandle(h); }
+    ~FileHandle() {
+#ifdef _WIN32
+        if (h != INVALID_HANDLE_VALUE) ::CloseHandle(h);
+#endif
+    }
     FileHandle(const FileHandle&) = delete;
     FileHandle& operator=(const FileHandle&) = delete;
 
@@ -46,7 +56,12 @@ struct FileHandle {
         ::GetFileSizeEx(h, &size);
         return true;
 #else
-        return false;
+        in.open(utf8path, std::ios::binary);
+        if (!in) return false;
+        in.seekg(0, std::ios::end);
+        size = in.tellg();
+        in.seekg(0, std::ios::beg);
+        return size >= 0;
 #endif
     }
 
@@ -63,7 +78,23 @@ struct FileHandle {
         if (!::ReadFile(h, pBuf, toRead, &got, nullptr)) return 0;
         return (size_t)got;
 #else
-        return 0;
+        if ((mz_uint64)size < offset) return 0;
+        std::streamoff remain = size - (std::streamoff)offset;
+        if (remain <= 0) return 0;
+        size_t want = (size_t)MZ_MIN((mz_uint64)n, (mz_uint64)remain);
+        in.seekg((std::streamoff)offset, std::ios::beg);
+        in.read(static_cast<char*>(pBuf), (std::streamsize)want);
+        size_t got = (size_t)in.gcount();
+        return got;
+#endif
+    }
+
+    // 统一取文件大小（平台无关）
+    mz_uint64 sizeBytes() const {
+#ifdef _WIN32
+        return (mz_uint64)size.QuadPart;
+#else
+        return (mz_uint64)(size >= 0 ? size : 0);
 #endif
     }
 };
@@ -85,7 +116,7 @@ bool mz_zip_reader_init_utf8(mz_zip_archive* pZip, void* fileHandle,
     if (!mz_zip_reader_init_internal(pZip, flags)) return false;
 
     // 顺序关键：read_central_dir 之前必须设好回调，否则 miniz 走默认 mem 读取。
-    pZip->m_archive_size = (mz_uint64)fh->size.QuadPart;
+    pZip->m_archive_size = fh->sizeBytes();
     pZip->m_pRead = detail::fileReadFunc;
     pZip->m_pIO_opaque = fh;
 
