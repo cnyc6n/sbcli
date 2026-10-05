@@ -251,8 +251,17 @@ inline void writeCharMeta(const std::string& path, const CharMeta& m,
     std::vector<std::string> out;
     auto defs = defaultCharMeta(spriteName, isStage);
 
-    if (m.exists) {
-        // 已存在：保留原顺序、原值；5 个集合字段统一在末尾重写
+    // 已写出的键，用于去重（kv 优先于 lines）
+    std::set<std::string> written;
+    auto emitKV = [&](const std::string& k, const std::string& v) {
+        if (written.count(k)) return;
+        written.insert(k);
+        out.push_back(k + ": " + v);
+    };
+
+    if (m.exists && !m.lines.empty()) {
+        // 已存在且有原文件行：保留原顺序；5 个集合字段末尾重写；
+        // kv 里非集合字段的值覆盖原行（保留原位置），kv 里没有的键保持原行。
         for (const std::string& raw : m.lines) {
             std::string s = trimStr(raw);
             size_t colon = s.find(':');
@@ -262,13 +271,19 @@ inline void writeCharMeta(const std::string& path, const CharMeta& m,
             if (key == "variables" || key == "lists" || key == "broadcasts" ||
                 key == "costumes" || key == "sounds")
                 continue;
-            out.push_back(raw);
+            auto kvi = m.kv.find(key);
+            if (kvi != m.kv.end()) emitKV(kvi->first, kvi->second);
+            else { out.push_back(raw); written.insert(key); }
         }
-        for (const auto& kv : defs)
-            if (!m.has(kv.first)) out.push_back(kv.first + ": " + kv.second);
-    } else {
-        for (const auto& kv : defs) out.push_back(kv.first + ": " + kv.second);
     }
+    // kv 中尚未写出的键（API 直接构造的 CharMeta 只有 kv、没有 lines 时，
+    // 这里保证 name / is_stage 等被写出，而不是静默丢弃）
+    for (const auto& kv : m.kv) emitKV(kv.first, kv.second);
+    // 缺省属性仅补未写过的
+    for (const auto& kv : defs)
+        if (!written.count(kv.first) && !m.kv.count(kv.first))
+            out.push_back(kv.first + ": " + kv.second);
+
     out.push_back("costumes: "   + renderAssets(m.costumes));
     out.push_back("sounds: "     + renderAssets(m.sounds));
     out.push_back("variables: "  + renderNames(m.variables, true));

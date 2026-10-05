@@ -3,6 +3,7 @@
 #include "sb3_internal.hpp"
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <optional>
 #include <set>
 
@@ -339,6 +340,33 @@ Json sb3Summarize(const std::string& path) {
 std::vector<std::string> findSb3Files(const std::string& root) {
     return walkFiles(root, {".sb3", ".sb2", ".sprite3", ".sb"},
                      {"__MACOSX", "$RECYCLE.BIN", "System Volume Information"});
+}
+
+// 扫描目录下的 sbcli 项目，返回全部 character/*/block.sbcli 路径。
+// （meta.sbcli 也参与搜索，由调用方自行读文件）
+std::vector<std::string> findSbcliBlockFiles(const std::string& root) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    std::filesystem::path base = std::filesystem::u8path(root);
+    // 从 root 出发，向上最多 0 层找项目根（root 可能就是项目根）
+    std::filesystem::path cur = base;
+    for (int k = 0; k < 4; ++k) {
+        if (std::filesystem::is_directory(cur / "character", ec)) {
+            std::filesystem::path cd = cur / "character";
+            for (auto& de : std::filesystem::directory_iterator(cd, ec)) {
+                if (!de.is_directory(ec)) continue;
+                std::filesystem::path bp = de.path() / "block.sbcli";
+                if (std::filesystem::exists(bp, ec))
+                    out.push_back(bp.u8string());
+            }
+            return out;
+        }
+        // 往上层找（用户可能传了 character/ 或某个子目录）
+        std::filesystem::path par = cur.parent_path();
+        if (par == cur) break;
+        cur = par;
+    }
+    return out;
 }
 
 // 名称清单（sb3_name_lists）

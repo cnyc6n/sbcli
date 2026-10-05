@@ -98,6 +98,10 @@ struct SbcValue {
     Kind        kind    = Kind::Scalar;
     SbToken     scalar;              // Scalar: 值 token；Reporter: '(' 或 '<' 那个 token
     bool        boolean = false;      // Reporter: 是否为 <...>（布尔 reporter）
+    // 变量/列表的作用域提示：0=未指定（按隐式规则），1=@local，2=@global。
+    // Scratch 允许全局与角色各有一份同名变量，写手用 `@local:名` / `@global:名` 消歧。
+    enum class Scope : unsigned char { Unspecified = 0, Local = 1, Global = 2 };
+    Scope       scope = Scope::Unspecified;   // Scalar 专用：名字前的作用域提示
     std::vector<SbcParam>   args;     // Reporter: 命名参数（可再嵌 reporter）
     std::vector<SbToken>    items;    // List: 元素 token（只允许标量）
 

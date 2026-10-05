@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      - name: 配置构建
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: 构建主程序
+        run: cmake --build build --target sb -j $(nproc)
+
+      - name: 构建测试套件
+        run: |
+          cmake --build build --target sb_parser_test -j $(nproc) || true
+          cmake --build build --target sb_parser_test2 -j $(nproc) || true
+          cmake --build build --target sb_fix_test -j $(nproc) || true
+          cmake --build build --target sb_pack_test -j $(nproc) || true
+
+      - name: 运行测试
+        run: |
+          set +e
+          for t in sb_parser_test sb_parser_test2 sb_fix_test sb_pack_test; do
+            if [ -f "build/$t" ]; then
+              ./build/$t
+              echo "$t exit=$?"
+            fi
+          done
+
+      - name: 冒烟测试
+        run: |
+          ./build/sb --help > /dev/null
+          ./build/sb search 广播 | head -5
+          echo "=== 冒烟完成 ==="

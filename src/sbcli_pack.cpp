@@ -93,6 +93,11 @@ Json primShadow(const SbToken& t) {
     } else if (s == "true" || s == "false") {
         inner.push_back(10);
         inner.push_back(s);
+    } else if (s.empty() && !t.quoted) {
+        // 空槽（无引号的裸空值）：Scratch 的空 input 默认是**数字槽** [4,""]。
+        // 带引号的 ""（quoted=true）是明确空文本，保持 [10,""]（渲染 ∅）。
+        inner.push_back(4);
+        inner.push_back("");
     } else {
         inner.push_back(10);
         inner.push_back(s);
@@ -161,6 +166,8 @@ struct PackCtx {
     std::map<std::string, Json> blocks;      // id → block
     std::set<std::string> globalVars;        // 全局变量名（来自根 meta）
     std::set<std::string> globalLists;       // 全局列表名（来自根 meta）
+    std::set<std::string> localVars;         // 本角色私有变量名（局部优先解析用）
+    std::set<std::string> localLists;        // 本角色私有列表名
     std::set<std::string>* missing = nullptr;// 未知 opcode 统计（可为空）
     long long counter = 0;
     std::string newId() { return "b" + std::to_string(++counter); }
@@ -240,15 +247,37 @@ void routeParam(Json& b, const SbcParam& p, PackCtx& ctx,
 
     if (key == "VARIABLE") {
         const std::string& nm = pv.scalar.text;
-        const std::string& id = ctx.globalVars.count(nm)
-                                 ? sbcVarId("stage", nm) : sbcVarId(ctx.scope, nm);
+        // 作用域解析（显式提示优先，其次 Scratch 的局部优先规则）：
+        //   1. @local:名   → 强制用当前角色的私有 id
+        //   2. @global:名  → 强制用 stage 的全局 id
+        //   3. 无提示      → 局部优先（角色声明过则用角色 id），否则全局，再否则兜底当前 scope
+        std::string id;
+        if (pv.scope == SbcValue::Scope::Local)
+            id = sbcVarId(ctx.scope, nm);
+        else if (pv.scope == SbcValue::Scope::Global)
+            id = sbcVarId("stage", nm);
+        else if (ctx.localVars.count(nm))
+            id = sbcVarId(ctx.scope, nm);
+        else if (ctx.globalVars.count(nm))
+            id = sbcVarId("stage", nm);
+        else
+            id = sbcVarId(ctx.scope, nm);
         b["fields"]["VARIABLE"] = Json::array();
         b["fields"]["VARIABLE"].push_back(nm);
         b["fields"]["VARIABLE"].push_back(id);
     } else if (key == "LIST") {
         const std::string& nm = pv.scalar.text;
-        const std::string& id = ctx.globalLists.count(nm)
-                                 ? sbcVarId("stage", nm) : sbcVarId(ctx.scope, nm);
+        std::string id;
+        if (pv.scope == SbcValue::Scope::Local)
+            id = sbcVarId(ctx.scope, nm);
+        else if (pv.scope == SbcValue::Scope::Global)
+            id = sbcVarId("stage", nm);
+        else if (ctx.localLists.count(nm))
+            id = sbcVarId(ctx.scope, nm);
+        else if (ctx.globalLists.count(nm))
+            id = sbcVarId("stage", nm);
+        else
+            id = sbcVarId(ctx.scope, nm);
         b["fields"]["LIST"] = Json::array();
         b["fields"]["LIST"].push_back(nm);
         b["fields"]["LIST"].push_back(id);
@@ -521,14 +550,19 @@ void collectRefs(const std::vector<SbcScript>& scripts, Refs& r) {
 }
 
 // 翻译整组脚本为一个 target 的 blocks 表（id→block）
+// localVars/localLists：本角色 meta 里声明的私有变量/列表名（局部优先解析用）。
 Json buildTargetBlocks(const std::vector<SbcScript>& scripts, const std::string& scope,
                        const std::set<std::string>& globalVars,
                        const std::set<std::string>& globalLists,
-                       std::set<std::string>* missing) {
+                       std::set<std::string>* missing,
+                       const std::set<std::string>& localVars = {},
+                       const std::set<std::string>& localLists = {}) {
     PackCtx ctx;
     ctx.scope = scope;
     ctx.globalVars = globalVars;
     ctx.globalLists = globalLists;
+    ctx.localVars = localVars;
+    ctx.localLists = localLists;
     ctx.missing = missing;
     for (size_t i = 0; i < scripts.size(); ++i) emitScript(scripts[i], ctx, (int)i);
     Json out = Json::object();
@@ -809,40 +843,50 @@ int cmd_pack(Args& a) {
         if (fs::exists(blockPath))
             scripts = std::move(sbcParseFile(blockPath.string()).scripts);
 
-        // 收集引用，保证变量/列表都被登记（全局的归舞台，本地的归角色）
+        // 作用域分析（与 Scratch 一致：局部优先）
+        //  · 角色 meta 里**显式声明**的名字 = 该角色的私有变量/列表（即使全局也有同名）
+        //  · 仅被脚本引用、且未在任何地方声明为私有的名字 → 归全局（若全局有）
         Refs refs;
         collectRefs(scripts, refs);
-        std::set<std::string> localset;
-        auto addLocal = [&](const std::set<std::string>& src) {
-            for (const auto& n : src) if (!globalVars.count(n) && !globalLists.count(n))
-                localset.insert(n);
+        const std::set<std::string>& declaredVars  = sp.meta.variables;
+        const std::set<std::string>& declaredLists = sp.meta.lists;
+
+        auto isLocalVar = [&](const std::string& n) {
+            if (declaredVars.count(n)) return true;                 // 显式私有（局部优先）
+            return refs.vars.count(n) && !globalVars.count(n);      // 未全局声明 → 私有
         };
-        addLocal(refs.vars);   addLocal(refs.lists);
-        addLocal(sp.meta.variables); addLocal(sp.meta.lists);
+        auto isLocalList = [&](const std::string& n) {
+            if (declaredLists.count(n)) return true;
+            return refs.lists.count(n) && !globalLists.count(n);
+        };
 
-        // 注意：上面把变量和列表混在一个 localset 里；下面分别归位
         std::set<std::string> localVars, localLists;
-        for (const auto& n : refs.vars)        if (!globalVars.count(n))  localVars.insert(n);
-        for (const auto& n : sp.meta.variables) if (!globalVars.count(n)) localVars.insert(n);
-        for (const auto& n : refs.lists)        if (!globalLists.count(n)) localLists.insert(n);
-        for (const auto& n : sp.meta.lists)     if (!globalLists.count(n)) localLists.insert(n);
-        (void)localset;
+        for (const auto& n : refs.vars)    if (isLocalVar(n))  localVars.insert(n);
+        for (const auto& n : declaredVars) localVars.insert(n);
+        for (const auto& n : refs.lists)    if (isLocalList(n)) localLists.insert(n);
+        for (const auto& n : declaredLists) localLists.insert(n);
 
+        // 私有变量的初值：CharMeta 只存名字集合（无初值），默认 0。
+        // 初值的权威来源是根 meta（全局）与 add-variable 写入的行；这里保守用 0，
+        // 与 Scratch 打开后未初始化的默认表现一致。
         Json vars = Json::object();
         for (const auto& v : localVars) {
-            vars[sbcVarId(sp.id, v)] = Json::array();
-            vars[sbcVarId(sp.id, v)].push_back(v);
-            vars[sbcVarId(sp.id, v)].push_back(0);
+            const std::string id = sbcVarId(sp.id, v);
+            vars[id] = Json::array();
+            vars[id].push_back(v);
+            vars[id].push_back(0);
         }
         Json lists = Json::object();
         for (const auto& l : localLists) {
-            lists[sbcVarId(sp.id, l)] = Json::array();
-            lists[sbcVarId(sp.id, l)].push_back(l);
-            lists[sbcVarId(sp.id, l)].push_back(Json::array());
+            const std::string id = sbcVarId(sp.id, l);
+            lists[id] = Json::array();
+            lists[id].push_back(l);
+            lists[id].push_back(Json::array());
         }
         Json bcasts = Json::object();
 
-        Json blocks = buildTargetBlocks(scripts, sp.id, globalVars, globalLists, &missing);
+        Json blocks = buildTargetBlocks(scripts, sp.id, globalVars, globalLists, &missing,
+                                        sp.meta.variables, sp.meta.lists);
 
         Json sprite = Json::object();
         sprite["isStage"]        = false;

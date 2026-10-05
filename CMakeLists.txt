@@ -95,5 +95,39 @@ if (WIN32)
     target_compile_definitions(sb PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+# ---------------------------------------------------------------------------
+# pack / unpack 回归测试（round-trip 为核心）
+#
+# 同样是本地目录、不纳入版本控制，用 EXISTS 条件包含。
+# 这套测试**链接源码**（不是跑子进程），所以往 sbcli_pack.cpp /
+# sbcli_unpack.cpp 注 bug → 删对应 .obj → 重编 → 测试应当失败。
+# 链接的文件与 sb 主程序保持一致（仅剔除命令分发与 sb1/sb3 展示命令）。
+# ---------------------------------------------------------------------------
+
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pack_roundtrip.cpp)
+    add_executable(sb_pack_test
+        tests/test_pack_roundtrip.cpp
+        src/jdoc.cpp
+        src/sapi.cpp
+        src/miniz_impl.cpp
+        src/common.cpp
+        src/sb2.cpp
+        src/sb3_load.cpp
+        src/sb3_helpers.cpp
+        src/sb3_render.cpp
+        src/sbcli_parser.cpp
+        src/sbcli_pack.cpp
+        src/sbcli_unpack.cpp
+        third_party/simdjson.cpp
+    )
+    target_include_directories(sb_pack_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    if (WIN32)
+        target_compile_definitions(sb_pack_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+endif()
+
 # simdjson 不开优化基本没有意义，单独给它开 -O2
 set_source_files_properties(third_party/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-O2")

@@ -35,6 +35,10 @@ static int sbcliCmdInfo(Args& a);
 static int sbcliCmdSprites(Args& a);
 static int sbcliCmdScript(Args& a);
 static int sbcliCmdVars(Args& a);
+static int sbcliCmdRefs(Args& a);
+static int sbcliCmdEvents(Args& a);
+static int sbcliCmdText(Args& a);
+static int sbcliCmdBlocks(Args& a);
 
 std::string detectFormat(const std::string& path) {
     // 目录：若是 sbcli 项目（含 meta.sbcli 或 character/）→ "sbcli"
@@ -43,8 +47,8 @@ std::string detectFormat(const std::string& path) {
         std::string root = std::filesystem::path(path).string();
         if (std::filesystem::is_directory(root, ec)) {
             namespace mfs = std::filesystem;
-            if (mfs::exists(mfs::path(root) / "meta.sbcli", ec) ||
-                mfs::exists(mfs::path(root) / "character", ec))
+            if (std::filesystem::exists(mfs::path(root) / "meta.sbcli", ec) ||
+                std::filesystem::exists(mfs::path(root) / "character", ec))
                 return "sbcli";
             return "dir";
         }
@@ -190,6 +194,7 @@ int cmd_sprites(Args& a) {
 
 int cmd_text(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdText(a);
     if (fmt == "sb1") return s1_cmd_text(a);
     return s3_cmd_text(a);
 }
@@ -352,6 +357,7 @@ int cmd_media(Args& a) {
 
 int cmd_blocks(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdBlocks(a);
     if (fmt == "sb1") {
         std::cerr << "提示：Scratch 1.4 的脚本不是块字典结构，暂不支持统计。\n";
         return 2;
@@ -378,6 +384,7 @@ int cmd_json(Args& a) {
 
 int cmd_refs(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdRefs(a);
     if (fmt == "sb1")
         return s1_cmd_refs(a);
     return s3_cmd_refs(a);
@@ -385,6 +392,7 @@ int cmd_refs(Args& a) {
 
 int cmd_events(Args& a) {
     std::string fmt = detectFormat(a.file);
+    if (fmt == "sbcli") return sbcliCmdEvents(a);
     if (fmt == "sb1")
         return s1_cmd_events(a);
     return s3_cmd_events(a);
@@ -736,6 +744,7 @@ int cmd_find(Args& a) {
 
     std::vector<std::string> files1 = findSb1Files(a.dir);
     std::vector<std::string> files3 = findSb3Files(a.dir);
+    std::vector<std::string> filesSbc = findSbcliBlockFiles(a.dir);
     auto filter = [&](std::vector<std::string>& v) {
         if (a.fileFilter.empty()) return;
         std::string f = a.fileFilter;
@@ -753,19 +762,47 @@ int cmd_find(Args& a) {
     filter(files1);
     filter(files3);
 
+    // sbcli 项目目录的 block.sbcli（纯文本搜索）
+    filter(filesSbc);
+
+    // 项目文本文件的搜索 worker：大小写不敏感行匹配
+    auto sbcFindInFile = [&](const std::string& p) -> std::vector<FindHit> {
+        std::vector<FindHit> out;
+        std::ifstream in(p, std::ios::binary);
+        if (!in) return out;
+        std::string line;
+        int ln = 0;
+        while (std::getline(in, line)) {
+            ++ln;
+            std::string low = line;
+            std::transform(low.begin(), low.end(), low.begin(),
+                           [](unsigned char c) { return (char)::tolower(c); });
+            if (low.find(kw) == std::string::npos) continue;
+            FindHit h;
+            h.file = p;
+            h.target = "";
+            h.where = "";
+            h.text = "行" + std::to_string(ln) + ": " + line;
+            out.push_back(std::move(h));
+        }
+        return out;
+    };
+
     std::vector<FindHit> hits;
     // ---- 多线程搜索：按 --jobs 分片（默认 4，与 sb.py 一致）----
     int jobs = a.jobs > 0 ? a.jobs : 4;
-    // 交替混合两类文件，尽量均摊；去重（.sb 会被两类同时匹配）
+    // 交替混合文件，尽量均摊；去重（.sb 会被两类同时匹配）
     std::vector<std::string> files;
-    files.reserve(files1.size() + files3.size());
+    files.reserve(files1.size() + files3.size() + filesSbc.size());
     std::set<std::string> seenFiles;
-    size_t n = std::max(files1.size(), files3.size());
+    size_t n = std::max({files1.size(), files3.size(), filesSbc.size()});
     for (size_t i = 0; i < n; ++i) {
         if (i < files1.size() && seenFiles.insert(files1[i]).second)
             files.push_back(files1[i]);
         if (i < files3.size() && seenFiles.insert(files3[i]).second)
             files.push_back(files3[i]);
+        if (i < filesSbc.size() && seenFiles.insert(filesSbc[i]).second)
+            files.push_back(filesSbc[i]);
     }
     size_t nFiles = files.size();
     if (jobs > 1 && nFiles > 8) {
@@ -777,7 +814,8 @@ int cmd_find(Args& a) {
                 for (size_t i = w; i < nFiles; i += jobs) {
                     const std::string& p = files[i];
                     auto h = isSb1File(p) ? sb1FindInFile(p, kw, a.script)
-                                          : sb3FindInFile(p, kw, a.script);
+                          : (std::find(filesSbc.begin(), filesSbc.end(), p) != filesSbc.end()
+                             ? sbcFindInFile(p) : sb3FindInFile(p, kw, a.script));
                     auto& out = results[w];
                     out.insert(out.end(), h.begin(), h.end());
                 }
@@ -789,7 +827,8 @@ int cmd_find(Args& a) {
     } else {
         for (auto& p : files) {
             auto h = isSb1File(p) ? sb1FindInFile(p, kw, a.script)
-                                  : sb3FindInFile(p, kw, a.script);
+                  : (std::find(filesSbc.begin(), filesSbc.end(), p) != filesSbc.end()
+                     ? sbcFindInFile(p) : sb3FindInFile(p, kw, a.script));
             hits.insert(hits.end(), h.begin(), h.end());
         }
     }
@@ -946,6 +985,399 @@ int cmd_view(Args& a) {
                           << l.text << "\n";
             }
         }
+    }
+    return 0;
+}
+
+// ==========================================================================
+// refs：项目目录 → 变量/列表读写交叉引用（与 sb3 版同风格）
+// 数据源是 block.sbcli 的 AST（sbcParseFile），不经过 simdjson DOM。
+// ==========================================================================
+
+namespace {
+
+// 从 AST 收集某脚本里对变量/列表的读写操作。
+// actionByOp：写时的动作词（设置/增减/追加/删除项/清空/替换/插入/读取）。
+struct ProjOp {
+    int    script = 0;
+    std::string action;
+    std::string text;   // 渲染后的块文本（用 sbcliView 的能力）
+};
+
+void collectSbcRefs(const SbcBlock& b, std::map<std::string, std::vector<ProjOp>>& writes,
+                    std::map<std::string, std::vector<ProjOp>>& reads,
+                    std::map<std::string, std::vector<ProjOp>>& bcasts,
+                    int scriptIdx) {
+    const std::string& op = b.opcode;
+    auto paramVal = [&](const char* canon) -> std::string {
+        const SbcParam* p = b.find(canon);
+        if (!p || !p->value || p->value->kind != SbcValue::Kind::Scalar) return {};
+        std::string s = p->value->text();
+        // 去掉可能的作用域前缀 @local:/@global:（只留名）
+        if (s.rfind("@local:", 0) == 0)  s = s.substr(7);
+        else if (s.rfind("@global:", 0) == 0) s = s.substr(8);
+        // 去掉引号
+        if (s.size() >= 2 && s.front() == '"' && s.back() == '"') s = s.substr(1, s.size() - 2);
+        return s;
+    };
+    ProjOp o; o.script = scriptIdx;
+
+    if (op == "data_setvariableto")      { o.action = "设置"; writes[paramVal("VARIABLE")].push_back(o); }
+    else if (op == "data_changevariableby") { o.action = "增减"; writes[paramVal("VARIABLE")].push_back(o); }
+    else if (op == "data_variable")      { o.action = "读取"; reads[paramVal("VARIABLE")].push_back(o); }
+    else if (op == "data_showvariable" || op == "data_hidevariable") { reads[paramVal("VARIABLE")].push_back(o); }
+    else if (op == "data_addtolist")     { o.action = "追加"; writes[paramVal("LIST")].push_back(o); }
+    else if (op == "data_deleteoflist")  { o.action = "删除项"; writes[paramVal("LIST")].push_back(o); }
+    else if (op == "data_deletealloflist"){ o.action = "清空"; writes[paramVal("LIST")].push_back(o); }
+    else if (op == "data_insertatlist")  { o.action = "插入"; writes[paramVal("LIST")].push_back(o); }
+    else if (op == "data_replaceitemoflist") { o.action = "替换"; writes[paramVal("LIST")].push_back(o); }
+    else if (op == "data_itemoflist" || op == "data_lengthoflist" ||
+             op == "data_listcontainsitem" || op == "data_listindexofitem") {
+        o.action = "读取";
+        reads[paramVal("LIST")].push_back(o);
+    }
+    else if (op == "data_listcontents")  { reads[paramVal("LIST")].push_back(o); }
+    else if (op == "event_broadcast" || op == "event_broadcastandwait") {
+        bcasts[paramVal("BROADCAST_INPUT")].push_back(o);
+    }
+    else if (op == "event_whenbroadcastreceived") {
+        // 接收也算在 bcasts 里但区分方向；这里简化记录为接收
+        const SbcParam* p = b.find("BROADCAST_OPTION");
+        if (p && p->value && p->value->kind == SbcValue::Kind::Scalar) {
+            std::string nm = p->value->text();
+            if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"')
+                nm = nm.substr(1, nm.size() - 2);
+            o.action = "接收";
+            bcasts[nm].push_back(o);
+        }
+    }
+
+    // 递归子栈
+    for (const auto& sub : b.substacks)
+        for (const auto& cb : sub)
+            collectSbcRefs(cb, writes, reads, bcasts, scriptIdx);
+}
+
+} // namespace
+
+static int sbcliCmdRefs(Args& a) {
+    // 项目目录 → 角色列表（复用 sbcliView 找到 character/ 下的目录）
+    std::string root = sb::meta::findProjectRoot(a.file);
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+
+    // 名字 → 角色 → 操作
+    struct RefEntry { int script; std::string action; std::string text; };
+    std::map<std::string, std::map<std::string, std::vector<RefEntry>>> writes, reads;
+    std::map<std::string, std::map<std::string, std::vector<RefEntry>>> bcasts;
+    std::set<std::string> listNames;   // 名字是否列表
+
+    /* 遍历角色目录 */ {
+        std::error_code ec;
+        std::filesystem::path cd = std::filesystem::u8path(root) / "character";
+        std::vector<std::pair<std::string, std::string>> roles; // (dirId, name)
+        if (std::filesystem::is_directory(cd, ec))
+            for (auto& de : std::filesystem::directory_iterator(cd, ec))
+                if (de.is_directory(ec)) {
+                    std::string id = de.path().filename().u8string();
+                    sb::meta::CharMeta m = sb::meta::loadCharMeta(
+                        (de.path() / "meta.sbcli").u8string());
+                    std::string nm = m.has("name") ? m.get("name") : id;
+                    roles.emplace_back(id, nm);
+                }
+        std::sort(roles.begin(), roles.end());
+
+        for (auto& role : roles) {
+            std::filesystem::path bp = cd / role.first / "block.sbcli";
+            if (!std::filesystem::exists(bp)) continue;
+            SbcFile sf = sbcParseFile(bp.u8string());
+            int scriptIdx = 0;
+            for (const auto& sc : sf.scripts) {
+                ++scriptIdx;
+                std::map<std::string, std::vector<ProjOp>> w, r, bc;
+                for (const auto& b : sc.blocks)
+                    collectSbcRefs(b, w, r, bc, scriptIdx);
+                // 合并进大表
+                auto merge = [&role, &scriptIdx](auto& dst, const auto& src) {
+                    for (auto& kv : src) {
+                        for (auto& o : kv.second) {
+                            RefEntry e; e.script = o.script; e.action = o.action;
+                            e.text = "·脚本" + std::to_string(o.script);
+                            dst[kv.first][role.second].push_back(std::move(e));
+                        }
+                    }
+                };
+                merge(writes, w);
+                merge(reads, r);
+                merge(bcasts, bc);
+            }
+        }
+    }
+    // 识别列表：从 meta 的 lists 字段
+    {
+        std::error_code ec;
+        std::filesystem::path cd = std::filesystem::u8path(root) / "character";
+        if (std::filesystem::is_directory(cd, ec))
+            for (auto& de : std::filesystem::directory_iterator(cd, ec))
+                if (de.is_directory(ec)) {
+                    sb::meta::CharMeta m = sb::meta::loadCharMeta(
+                        (de.path() / "meta.sbcli").u8string());
+                    for (auto& l : m.lists) listNames.insert(l);
+                }
+        sb::meta::CharMeta rm = sb::meta::loadCharMeta(root + "/meta.sbcli");
+        /* RootMeta 的 lists 是 map */ {
+            sb::meta::RootMeta r2 = sb::meta::loadRootMeta(root + "/meta.sbcli");
+            for (auto& kv : r2.lists) listNames.insert(kv.first);
+        }
+    }
+
+    // ---- 输出 ----
+    auto show = [&](const char* title,
+                    std::map<std::string, std::map<std::string, std::vector<RefEntry>>>& tbl) {
+        for (auto& kv : tbl) {
+            if (!a.extra.empty() && kv.first.find(a.extra[0]) == std::string::npos) continue;
+            std::cout << "\n" << (listNames.count(kv.first) ? "列表" : "变量")
+                      << " " << kv.first << "\n";
+            std::cout << "  " << title << "：\n";
+            for (auto& role : kv.second) {
+                std::cout << "    " << role.first << "\n";
+                std::string cur;
+                std::string curAction;
+                for (auto& e : role.second) {
+                    if (e.script != 0 && (cur != "·脚本" + std::to_string(e.script) ||
+                                          curAction != e.action)) {
+                        std::cout << "      · 脚本" << e.script << "\n";
+                        cur = "·脚本" + std::to_string(e.script);
+                        curAction = e.action;
+                    }
+                    std::cout << "          " << e.action << "：" << e.text << "\n";
+                }
+            }
+        }
+    };
+    show("写", writes);
+    show("读", reads);
+    if (!a.extra.empty()) {
+        for (auto& kv : bcasts) {
+            if (kv.first.find(a.extra[0]) == std::string::npos) continue;
+            std::cout << "\n广播 " << kv.first << "\n";
+            for (auto& role : kv.second)
+                for (auto& e : role.second)
+                    std::cout << "  " << role.first << " ·脚本" << e.script
+                              << " " << e.action << "\n";
+        }
+    }
+    return 0;
+}
+
+// ==========================================================================
+// events：项目目录 → 广播拓扑（与 sb3 版同风格）
+// ==========================================================================
+
+static int sbcliCmdEvents(Args& a) {
+    std::string root = sb::meta::findProjectRoot(a.file);
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+
+    // 广播名 → (发送者/接收者: 角色·脚本)
+    struct Ev { std::string who; int script; };
+    std::map<std::string, std::vector<Ev>> senders, receivers;
+
+    std::error_code ec;
+    std::filesystem::path cd = std::filesystem::u8path(root) / "character";
+    std::vector<std::pair<std::string, std::string>> roles; // (dirId, name)
+    if (std::filesystem::is_directory(cd, ec))
+        for (auto& de : std::filesystem::directory_iterator(cd, ec))
+            if (de.is_directory(ec)) {
+                std::string id = de.path().filename().u8string();
+                sb::meta::CharMeta m = sb::meta::loadCharMeta(
+                    (de.path() / "meta.sbcli").u8string());
+                std::string nm = m.has("name") ? m.get("name") : id;
+                roles.emplace_back(id, nm);
+            }
+    std::sort(roles.begin(), roles.end());
+
+    for (auto& role : roles) {
+        std::filesystem::path bp = cd / role.first / "block.sbcli";
+        if (!std::filesystem::exists(bp)) continue;
+        SbcFile sf = sbcParseFile(bp.u8string());
+        int scriptIdx = 0;
+        for (const auto& sc : sf.scripts) {
+            ++scriptIdx;
+            std::function<void(const SbcBlock&)> walk =
+                [&](const SbcBlock& b) {
+                    const std::string& op = b.opcode;
+                    if (op == "event_broadcast" || op == "event_broadcastandwait") {
+                        const SbcParam* p = b.find("BROADCAST_INPUT");
+                        if (p && p->value && p->value->kind == SbcValue::Kind::Scalar) {
+                            std::string nm = p->value->text();
+                            if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"')
+                                nm = nm.substr(1, nm.size() - 2);
+                            Ev e; e.who = role.second; e.script = scriptIdx;
+                            senders[nm].push_back(std::move(e));
+                        }
+                    } else if (op == "event_whenbroadcastreceived") {
+                        const SbcParam* p = b.find("BROADCAST_OPTION");
+                        if (p && p->value && p->value->kind == SbcValue::Kind::Scalar) {
+                            std::string nm = p->value->text();
+                            if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"')
+                                nm = nm.substr(1, nm.size() - 2);
+                            Ev e; e.who = role.second; e.script = scriptIdx;
+                            receivers[nm].push_back(std::move(e));
+                        }
+                    }
+                    for (const auto& sub : b.substacks)
+                        for (const auto& cb : sub) walk(cb);
+                };
+            for (const auto& b : sc.blocks) walk(b);
+        }
+    }
+
+    // 输出
+    std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
+    std::set<std::string> allB;
+    for (auto& kv : senders) allB.insert(kv.first);
+    for (auto& kv : receivers) allB.insert(kv.first);
+    if (allB.empty()) { std::cout << "这个作品没有广播。\n"; return 0; }
+    for (auto& bname : allB) {
+        std::cout << "\n■ " << bname;
+        bool hasS = senders.count(bname) && !senders[bname].empty();
+        bool hasR = receivers.count(bname) && !receivers[bname].empty();
+        if (!hasS) std::cout << "（⚠ 无发送者：可能是变量广播或残留）";
+        else if (!hasR) std::cout << "（⚠ 无接收者：广播发出但没人监听，可能拼错或残留）";
+        std::cout << "\n";
+        if (hasS) {
+            std::cout << "  发：";
+            bool first = true;
+            for (auto& e : senders[bname]) {
+                if (!first) std::cout << "，";
+                first = false;
+                std::cout << e.who << "·脚本" << e.script;
+            }
+            std::cout << "\n";
+        }
+        if (hasR) {
+            std::cout << "  收：";
+            bool first = true;
+            for (auto& e : receivers[bname]) {
+                if (!first) std::cout << "，";
+                first = false;
+                std::cout << e.who << "·脚本" << e.script;
+            }
+            std::cout << "\n";
+        }
+    }
+    return 0;
+}
+
+// ==========================================================================
+// text：项目目录 → 提取文本参数（MESSAGE / 文本字面量等）
+// ==========================================================================
+
+static int sbcliCmdText(Args& a) {
+    std::string root = sb::meta::findProjectRoot(a.file);
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+
+    std::vector<std::string> texts;
+    std::error_code ec;
+    std::filesystem::path cd = std::filesystem::u8path(root) / "character";
+    std::vector<std::string> roleIds;
+    if (std::filesystem::is_directory(cd, ec))
+        for (auto& de : std::filesystem::directory_iterator(cd, ec))
+            if (de.is_directory(ec)) roleIds.push_back(de.path().filename().u8string());
+    std::sort(roleIds.begin(), roleIds.end());
+
+    for (auto& id : roleIds) {
+        std::filesystem::path bp = cd / id / "block.sbcli";
+        if (!std::filesystem::exists(bp)) continue;
+        SbcFile sf = sbcParseFile(bp.u8string());
+        std::function<void(const SbcBlock&)> walk = [&](const SbcBlock& b) {
+            // 文本型参数：canon 名是文本槽的（MESSAGE/STRING1/STRING2/ANSWER…）
+            // 以及标量值本身就是「带引号」的文本字面量
+            for (const auto& p : b.params) {
+                if (!p.value || p.value->kind != SbcValue::Kind::Scalar) continue;
+                const std::string& t = p.value->text();
+                // 词法器把 STRING 存为「不含引号的解码值」；用 quoted 标记判断
+                if (p.value->scalar.quoted)
+                    texts.push_back(t);
+            }
+            for (const auto& sub : b.substacks)
+                for (const auto& cb : sub) walk(cb);
+        };
+        for (const auto& sc : sf.scripts)
+            for (const auto& b : sc.blocks) walk(b);
+    }
+
+    // 去重保序
+    std::sort(texts.begin(), texts.end());
+    texts.erase(std::unique(texts.begin(), texts.end()), texts.end());
+
+    if (a.json) {
+        Json out = Json::object();
+        out["file"] = a.file;
+        Json arr = Json::array();
+        for (auto& s : texts) arr.push_back(s);
+        out["texts"] = arr;
+        sb3JsonOut(out);
+        return 0;
+    }
+    for (auto& s : texts) std::cout << s << "\n";
+    return 0;
+}
+
+// ==========================================================================
+// blocks：项目目录 → opcode 使用统计
+// ==========================================================================
+
+static int sbcliCmdBlocks(Args& a) {
+    std::string root = sb::meta::findProjectRoot(a.file);
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+
+    std::map<std::string, long long> opCount;
+    std::error_code ec;
+    std::filesystem::path cd = std::filesystem::u8path(root) / "character";
+    std::vector<std::string> roleIds;
+    if (std::filesystem::is_directory(cd, ec))
+        for (auto& de : std::filesystem::directory_iterator(cd, ec))
+            if (de.is_directory(ec)) roleIds.push_back(de.path().filename().u8string());
+    std::sort(roleIds.begin(), roleIds.end());
+
+    long long total = 0;
+    for (auto& id : roleIds) {
+        std::filesystem::path bp = cd / id / "block.sbcli";
+        if (!std::filesystem::exists(bp)) continue;
+        SbcFile sf = sbcParseFile(bp.u8string());
+        std::function<void(const SbcBlock&)> walk = [&](const SbcBlock& b) {
+            opCount[b.opcode]++; total++;
+            for (const auto& sub : b.substacks)
+                for (const auto& cb : sub) walk(cb);
+        };
+        for (const auto& sc : sf.scripts)
+            for (const auto& b : sc.blocks) walk(b);
+    }
+
+    if (a.json) {
+        Json out = Json::object();
+        out["file"] = a.file;
+        out["total"] = total;
+        Json ops = Json::object();
+        for (auto& kv : opCount) ops[kv.first] = kv.second;
+        out["opcodes"] = ops;
+        sb3JsonOut(out);
+        return 0;
+    }
+    std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
+    std::cout << "共 " << total << " 个积木、" << opCount.size() << " 种 opcode\n";
+    // 按次数降序
+    std::vector<std::pair<long long, std::string>> sorted;
+    for (auto& kv : opCount) sorted.emplace_back(kv.second, kv.first);
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& x, const auto& y) {
+                  if (x.first != y.first) return x.first > y.first;
+                  return x.second < y.second;
+              });
+    long long shown = 0;
+    for (auto& kv : sorted) {
+        std::cout << "  " << kv.second << " ×" << kv.first << "\n";
+        if (a.limitSet && ++shown >= a.limit) break;
     }
     return 0;
 }

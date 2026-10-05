@@ -183,19 +183,43 @@ std::string Renderer::inputText(const Elem& b, const std::string& key, bool menu
 
 std::string Renderer::valueOf(const Elem& b, const std::string& key, bool menu) {
     Elem fields = b.at("fields");
-    if (fields.is_object() && fields.contains(key)) {
-        // field 映射（全局 FIELD_MAP）
-        Elem v = fields.at(key);
-        std::string val = v.is_array() ? (v.empty() ? "" : compactJson(v.op(0).raw()))
-                                       : compactJson(v.raw());
-        if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
-            val = val.substr(1, val.size() - 2);
-        auto it = FIELD_MAP.find(key);
-        if (it != FIELD_MAP.end()) {
-            auto jt = it->second.find(val);
-            if (jt != it->second.end()) return jt->second;
+    if (fields.is_object()) {
+        // 大小写不敏感匹配：模板用大写 {COLOR_PARAM}，但扩展 menu 块的 field
+        // 键可能是小写（pen_menu_colorParam → "colorParam"）。精确匹配优先，找不到再遍历。
+        Elem v;
+        std::string actualKey;
+        if (fields.contains(key)) {
+            v = fields.at(key);
+            actualKey = key;
+        } else {
+            std::string low = key;
+            std::transform(low.begin(), low.end(), low.begin(),
+                           [](unsigned char c) { return (char)::tolower(c); });
+            for (auto f : fields.obj()) {
+                std::string fk = std::string(f.key);
+                std::string fl = fk;
+                std::transform(fl.begin(), fl.end(), fl.begin(),
+                               [](unsigned char c) { return (char)::tolower(c); });
+                if (fl == low) { v = Elem(f.value); actualKey = fk; break; }
+            }
         }
-        return val;
+        if (v.ok()) {
+            // field 映射（全局 FIELD_MAP；键匹配也大小写不敏感）
+            std::string val = v.is_array() ? (v.empty() ? "" : compactJson(v.op(0).raw()))
+                                           : compactJson(v.raw());
+            if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+                val = val.substr(1, val.size() - 2);
+            auto it = FIELD_MAP.find(actualKey);
+            if (it == FIELD_MAP.end()) {
+                // 用模板给的键（大写）再试一次 FIELD_MAP
+                it = FIELD_MAP.find(key);
+            }
+            if (it != FIELD_MAP.end()) {
+                auto jt = it->second.find(val);
+                if (jt != it->second.end()) return jt->second;
+            }
+            return val;
+        }
     }
     Elem inputs = b.at("inputs");
     if (inputs.is_object() && inputs.contains(key)) {

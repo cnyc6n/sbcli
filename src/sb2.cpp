@@ -325,6 +325,29 @@ public:
                     blocks[bid]["inputs"][names[k]] = inps[oldKey];
                     dropInput(oldKey);
                 }
+
+                // 菜单字段搬迁：sb3 里这些是 **fields**（菜单），但 sb2 把它们放在 inputs。
+                // 不搬的话渲染走 inputs 路径、不做本地化（如 control_stop 显示 "all" 而非 "全部脚本"）。
+                // 权威菜单集合 = FIELD_MAP 的键（与 pack 同一来源）。
+                // 注意：排除 VARIABLE/LIST（它们有自己的 [名,id] 结构，由上方专门逻辑处理，
+                //       误搬会把 id 当成名字）。
+                for (size_t k = 0; k < names.size(); ++k) {
+                    const std::string& nm = names[k];
+                    if (nm.empty() || !FIELD_MAP.count(nm)) continue;
+                    if (nm == "VARIABLE" || nm == "LIST") continue;
+                    if (blocks[bid]["fields"].contains(nm)) continue;
+                    auto iv = blocks[bid]["inputs"].find(nm);
+                    if (iv == blocks[bid]["inputs"].end()) continue;
+                    // 形态 [1,[10,"值"]] → 取内层值写成 fields 的 [值]
+                    const json& arr = iv.value();
+                    if (arr.is_array() && arr.size() > 1 && arr[1].is_array() &&
+                        arr[1].size() > 1) {
+                        json fld = json::array();
+                        fld.push_back(arr[1][1]);
+                        blocks[bid]["fields"][nm] = std::move(fld);
+                        dropInput(nm);
+                    }
+                }
             }
         }
         // 变量/列表块的字段归一：sb2 的名字在 inputs.__N（[1,[10,"名"]]），

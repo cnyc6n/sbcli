@@ -91,6 +91,8 @@ Json sb3Summarize(const std::string& path);
 
 // 扫描目录里的 Scratch 2/3 文件
 std::vector<std::string> findSb3Files(const std::string& root);
+// 扫描 sbcli 项目目录，返回 character/*/block.sbcli 路径（供 find 搜索）
+std::vector<std::string> findSbcliBlockFiles(const std::string& root);
 
 // 命令
 struct Args;

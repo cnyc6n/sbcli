@@ -115,6 +115,11 @@ struct UnpackCtx {
     const Elem* t = nullptr;
     std::map<std::string, Elem> blocks;
     std::map<std::string, std::string> varNames, listNames, bcastNames;  // id → 名
+    // 作用域消歧用：当前 target 声明的变量/列表（按 id 与名字）以及全局的
+    std::set<std::string> currentVarIds, currentListIds;
+    std::set<std::string> currentVarNames, currentListNames;
+    std::set<std::string> globalVarIds, globalListIds;
+    std::set<std::string> globalVarNames, globalListNames;
     std::vector<std::string> lines;
     int unknown = 0;
     int depth   = 0;
@@ -139,6 +144,21 @@ void buildMaps(UnpackCtx& c) {
     collectPair(t.at("variables"),  c.varNames);
     collectPair(t.at("lists"),      c.listNames);
     collectPair(t.at("broadcasts"), c.bcastNames);
+
+    // 记录"当前 target 自己声明"的变量/列表（id + 名字），供同名消歧判断
+    auto collectScope = [](const Elem& obj, std::set<std::string>& ids,
+                           std::set<std::string>& names) {
+        if (!obj.is_object()) return;
+        for (auto f : obj.obj()) {
+            Elem v(f.value);
+            if (!v.is_array() || v.empty()) continue;
+            Elem n0 = v.op(0);
+            ids.insert(std::string(f.key));
+            if (n0.is_string()) names.insert(std::string(n0.sv()));
+        }
+    };
+    collectScope(t.at("variables"), c.currentVarIds,  c.currentVarNames);
+    collectScope(t.at("lists"),     c.currentListIds, c.currentListNames);
 }
 
 const Elem* blockOf(const UnpackCtx& c, const std::string& id) {
@@ -174,6 +194,7 @@ std::string shadowText(UnpackCtx& c, const Elem& x) {
                 if (vit != c.varNames.end()) return literalText(vit->second, false);
                 auto lit = c.listNames.find(s);
                 if (lit != c.listNames.end()) return literalText(lit->second, false);
+                if (s.empty()) return "";          // 数字空槽 → 裸空（pack 重建 [4,""]）
                 return literalText(s, false);
             }
             return "?";
@@ -287,7 +308,9 @@ std::string fieldText(UnpackCtx& c, const Elem& f) {
     Elem v = (f.is_array() && !f.empty()) ? f.op(0) : f;
     if (v.is_string()) {
         std::string s(v.sv());
-        if (looksLikeId(s)) {
+        // 不做 looksLikeId 前置过滤：id 不一定是纯 hex（sb2 遗留 id 形如 `@v@xxx`、
+        // 或含 `|`/`]` 等字符）。过滤会漏掉映射，把 id 当名字输出。
+        {
             auto vit = c.varNames.find(s);
             if (vit != c.varNames.end()) return literalText(vit->second, false);
             auto lit = c.listNames.find(s);
@@ -302,13 +325,43 @@ std::string fieldText(UnpackCtx& c, const Elem& f) {
     return v.ok() ? rawJsonOf(v) : "?";
 }
 
-// 变量/列表 field 的 [名, id]：只留名字（id 由 sbcVarId 重算，与 pack 天然一致）
+// 变量/列表 field 的 [名, id]：默认只留名字（id 由 sbcVarId 重算，与 pack 天然一致）。
+// 例外：当同名变量在**全局与当前角色都存在**时（Scratch 允许），名字不足以消歧，
+// 必须按 id 输出 `@local:名` / `@global:名`，否则重打包会指向同一个变量 → 数据串位。
 std::string varFieldText(UnpackCtx& c, const std::string& value) {
-    if (looksLikeId(value)) {
+    // 不做 looksLikeId 前置过滤：变量 id 不一定是纯 hex（sb2 用 @v@xxx 形式），
+    // 过滤会漏掉映射、把 id 当名字输出（曾造成 round-trip 回归）。
+    {
         auto vit = c.varNames.find(value);
-        if (vit != c.varNames.end()) return vit->second;
+        if (vit != c.varNames.end()) {
+            const std::string& nm = vit->second;
+            // 消歧前缀 + 名字：名字部分按 literalText 规则（简单标识符裸写，否则引号），
+            // 避免含空格/冒号的名字（如 "Stage: ii"）被词法按空格切分截断。
+            auto scoped = [&](const std::string& prefix) -> std::string {
+                std::string inner = literalText(nm, false);
+                return prefix + inner;
+            };
+            if (c.currentVarIds.count(value)) {
+                if (c.globalVarNames.count(nm)) return scoped("@local:");   // 全局也有同名 → 消歧
+            } else if (c.globalVarIds.count(value)) {
+                if (c.currentVarNames.count(nm)) return scoped("@global:");
+            }
+            return nm;
+        }
         auto lit = c.listNames.find(value);
-        if (lit != c.listNames.end()) return lit->second;
+        if (lit != c.listNames.end()) {
+            const std::string& nm = lit->second;
+            auto scoped = [&](const std::string& prefix) -> std::string {
+                std::string inner = literalText(nm, false);
+                return prefix + inner;
+            };
+            if (c.currentListIds.count(value)) {
+                if (c.globalListNames.count(nm)) return scoped("@local:");
+            } else if (c.globalListIds.count(value)) {
+                if (c.currentListNames.count(nm)) return scoped("@global:");
+            }
+            return nm;
+        }
     }
     return value;
 }
@@ -343,9 +396,20 @@ std::string paramsText(UnpackCtx& c, const Elem& b, const std::string& op, bool 
         for (auto& k : sortedKeysOf(fields.obj())) {
             std::string val = fieldText(c, fields.at(k));
             if (k == "VARIABLE" || k == "LIST") {
+                // 字段结构是 [名, id]：把 **id** 交给 varFieldText 做作用域消歧
+                Elem fv = fields.at(k);
+                std::string id;
+                if (fv.is_array() && fv.size() > 1 && fv.op(1).is_string())
+                    id = std::string(fv.op(1).sv());
                 std::string nm = val;
                 if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"') nm = unquoteStr(nm);
-                val = literalText(varFieldText(c, nm), false);
+                std::string res = varFieldText(c, id.empty() ? nm : id);
+                // `@local:名` / `@global:名` 是解析器认识的语法标记，不加引号输出；
+                // 其余含特殊字符的名字仍走 literalText 的引号规则。
+                if (res.rfind("@local:", 0) == 0 || res.rfind("@global:", 0) == 0)
+                    val = res;
+                else
+                    val = literalText(res, false);
             }
             out += " " + k + "=" + val;
         }
@@ -431,11 +495,11 @@ std::string definitionParams(UnpackCtx& c, const Elem& b, bool* hasArgs) {
         }
     }
     *hasArgs = !names.empty();
-    // ARGS 是裸名单（不是引号字符串），元素按名字裸写
+    // ARGS 元素：简单标识符裸写；含空格/逗号/引号的名字用双引号包（parseList 支持）
     std::string args;
     for (size_t i = 0; i < names.size(); ++i) {
         if (i) args += ", ";
-        args += names[i];
+        args += literalText(names[i], false);
     }
     return "PROCCODE=" + literalText(proccode, true) + " ARGS=[" + args + "]";
 }
@@ -464,7 +528,35 @@ std::string blockExpr(UnpackCtx& c, const std::string& id, bool* ok) {
     c.onStack.insert(id);
 
     std::string out;
-    if (op == "procedures_call") {
+    // menu 影子块（*_menu 等）：本身不渲染成 reporter，直接输出它的菜单字段值
+    //（如 sensing_of_object_menu → OBJECT=功能块）。否则会把 (sensing_of_object_menu)
+    // 当作 reporter 包出来，导致空槽/悬垂（round-trip 差异的根源）。
+    if (op.size() > 5 && op.compare(op.size() - 5, 5, "_menu") == 0) {
+        Elem flds = b.at("fields");
+        if (flds.is_object()) {
+            for (auto& k : sortedKeysOf(flds.obj())) {
+                Elem fv = flds.at(k);
+                Elem n0 = (fv.is_array() && !fv.empty()) ? fv.op(0) : fv;
+                if (n0.is_string()) {
+                    std::string nm(n0.sv());
+                    // [名, id] 取名字；名字空时用 id 反查（变量/广播）
+                    if (nm.empty() && fv.is_array() && fv.size() > 1 &&
+                        fv.op(1).is_string()) {
+                        std::string id(fv.op(1).sv());
+                        auto vit = c.varNames.find(id);
+                        if (vit != c.varNames.end()) nm = vit->second;
+                        else {
+                            auto bit = c.bcastNames.find(id);
+                            if (bit != c.bcastNames.end()) nm = bit->second;
+                        }
+                    }
+                    out = literalText(nm, false);
+                }
+                break;
+            }
+        }
+        if (out.empty()) out = "?";
+    } else if (op == "procedures_call") {
         out = proceduresCallExpr(c, b);
     } else if (op == "argument_reporter_string_number" ||
                op == "argument_reporter_boolean") {
@@ -912,6 +1004,7 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
 
     // 全局变量/列表/广播 = 舞台 target 的对应表（Scratch 约定）
     std::set<std::string> globalVars, globalLists;
+    std::set<std::string> globalVarIds, globalListIds;   // 按 id 判定"同一个变量"
     if (stage.ok()) {
         Elem vars = stage.at("variables");
         if (vars.is_object()) {
@@ -922,6 +1015,7 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
                 std::string nm = n0.is_string() ? std::string(n0.sv()) : rawJsonOf(n0);
                 root.variables[nm] = varInitText(v);
                 globalVars.insert(nm);
+                globalVarIds.insert(std::string(vf.key));
             }
         }
         Elem lists = stage.at("lists");
@@ -933,6 +1027,7 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
                 std::string nm = n0.is_string() ? std::string(n0.sv()) : rawJsonOf(n0);
                 root.lists[nm] = listInitText(l);
                 globalLists.insert(nm);
+                globalListIds.insert(std::string(lf.key));
             }
         }
         Elem bc = stage.at("broadcasts");
@@ -969,6 +1064,11 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
                  : (isStage ? "Stage" : ("角色" + dirId));
         p.ctx.t = &p.target;
         buildMaps(p.ctx);
+        // 传入全局作用域信息（同名消歧用）
+        p.ctx.globalVarIds    = globalVarIds;
+        p.ctx.globalListIds   = globalListIds;
+        p.ctx.globalVarNames  = globalVars;
+        p.ctx.globalListNames = globalLists;
         return p;
     };
 
@@ -980,6 +1080,40 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
             plans.push_back(makePlan(t, d, false));
             spriteNames.push_back(plans.back().name);
         }
+    }
+
+    // 全局变量/列表的 id→名映射合并进每个角色的 ctx：
+    // 全局变量声明在舞台，但**任何角色的脚本都能引用**它；不合并的话角色里
+    // 引用全局变量时查不到名字，会输出原始 id（round-trip 回归）。
+    for (auto& p : plans) {
+        if (p.isStage) continue;                 // 舞台本身就是全局声明处
+        Elem sv = stage.ok() ? stage.at("variables") : Elem();
+        if (sv.is_object())
+            for (auto vf : sv.obj()) {
+                Elem v(vf.value);
+                if (!v.is_array() || v.empty()) continue;
+                Elem n0 = v.op(0);
+                if (n0.is_string())
+                    p.ctx.varNames[std::string(vf.key)] = std::string(n0.sv());
+            }
+        Elem sl = stage.ok() ? stage.at("lists") : Elem();
+        if (sl.is_object())
+            for (auto lf : sl.obj()) {
+                Elem l(lf.value);
+                if (!l.is_array() || l.empty()) continue;
+                Elem n0 = l.op(0);
+                if (n0.is_string())
+                    p.ctx.listNames[std::string(lf.key)] = std::string(n0.sv());
+            }
+        Elem sb = stage.ok() ? stage.at("broadcasts") : Elem();
+        if (sb.is_object())
+            for (auto bf : sb.obj()) {
+                Elem b(bf.value);
+                if (!b.is_array() || b.empty()) continue;
+                Elem n0 = b.op(0);
+                if (n0.is_string())
+                    p.ctx.bcastNames[std::string(bf.key)] = std::string(n0.sv());
+            }
     }
 
     // 目录里提前登记所有广播（含角色级 broadcasts 表里的）
@@ -1071,15 +1205,18 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
         meta.kv = kv;
 
         // 角色级变量/列表（全局的留在根 meta）
+        // 注意：Scratch 允许全局与角色**同名**变量 —— 必须按 **id** 区分，不能按名字。
+        // 全局变量的 id 与根 meta 的相同 → 跳过；id 不同（即使同名）是该角色的私有变量。
         std::map<std::string, std::string> localVars, localLists;
         Elem vars = t.at("variables");
         if (vars.is_object()) {
             for (auto vf : vars.obj()) {
                 Elem v(vf.value);
                 if (!v.is_array() || v.empty()) continue;
+                std::string id(vf.key);
+                if (globalVarIds.count(id)) continue;      // 就是那个全局变量
                 Elem n0 = v.op(0);
                 std::string nm = n0.is_string() ? std::string(n0.sv()) : rawJsonOf(n0);
-                if (globalVars.count(nm)) continue;
                 if (nm.empty()) continue;
                 localVars[nm] = varInitText(v);
                 meta.variables.insert(nm);
@@ -1090,9 +1227,10 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
             for (auto lf : lists.obj()) {
                 Elem l(lf.value);
                 if (!l.is_array() || l.empty()) continue;
+                std::string id(lf.key);
+                if (globalListIds.count(id)) continue;
                 Elem n0 = l.op(0);
                 std::string nm = n0.is_string() ? std::string(n0.sv()) : rawJsonOf(n0);
-                if (globalLists.count(nm)) continue;
                 if (nm.empty()) continue;
                 localLists[nm] = listInitText(l);
                 meta.lists.insert(nm);

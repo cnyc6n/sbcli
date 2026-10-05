@@ -492,6 +492,7 @@ struct Parser {
         explicit TokStream(const std::vector<SbToken>& toks, int ln) : t(toks), line(ln) {}
         const SbToken& c() const { return t[p]; }
         SbTok k() const { return p < t.size() ? t[p].type : SbTok::END; }
+        const SbToken& peek() const { return (p + 1 < t.size()) ? t[p + 1] : t.back(); }
         bool  end() const { return p >= t.size() || t[p].type == SbTok::END; }
         void  adv() { if (p < t.size()) ++p; }
     };
@@ -511,6 +512,29 @@ struct Parser {
             case SbTok::IDENT:
             case SbTok::STRING: {
                 auto v = SbcValue::makeScalar(ts.c());
+                // 作用域前缀：@local:名 / @global:名（变量/列表同名消歧）
+                // 支持两种形态：裸名（@local:分数）与引号名（@local:"Stage: ii"）。
+                // 引号形态下词法器会切出 IDENT(@local:) + STRING(名字) 两个 token，
+                // 这里在 IDENT 分支窥视下一个 STRING 合并。
+                if (v->kind == SbcValue::Kind::Scalar &&
+                    ts.k() == SbTok::IDENT) {
+                    std::string raw = v->scalar.text;
+                    const std::string LC = "@local:", GC = "@global:";
+                    bool isLocal = (raw.rfind(LC, 0) == 0);
+                    bool isGlobal = (raw.rfind(GC, 0) == 0);
+                    if (isLocal || isGlobal) {
+                        std::string nm = raw.substr(isLocal ? LC.size() : GC.size());
+                        // 裸前缀（@local:）后若紧跟 STRING token（词法器切开的引号名），合并
+                        if (nm.empty() && ts.peek().type == SbTok::STRING) {
+                            nm = ts.peek().text;
+                            ts.adv();   // 吃掉 STRING
+                        }
+                        v->scope = isLocal ? SbcValue::Scope::Local
+                                           : SbcValue::Scope::Global;
+                        v->scalar.text = nm;
+                        v->scalar.quoted = false;   // 名字已提取，不再当引号文本
+                    }
+                }
                 ts.adv();
                 return v;
             }
