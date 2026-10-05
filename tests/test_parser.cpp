@@ -170,10 +170,28 @@ static void checkRoundTrip(const std::string& src, const char* label) {
 // ------------------------------------------------------------------ main
 
 int main() {
-    // 1) 真实样例
-    const char* sample = "D:\\文档\\scratch作品\\character\\1\\block.sbcli";
-    SbcFile real = sbcParseFile(sample);
-    std::printf("解析：%s\n", sample);
+    // 1) 真实样例（内联，跨平台：不依赖本机文件路径）
+    const std::string sample = R"(
+@script flag
+event_whenflagclicked
+data_setvariableto VARIABLE=分数 VALUE=0
+control_forever
+  control_if_else COND=<operator_gt A=(data_variable VARIABLE=分数) B=100>
+    event_broadcast BROADCAST_INPUT=游戏结束
+  else
+    data_changevariableby VARIABLE=分数 VALUE=1
+
+@script broadcast 游戏开始
+event_whenbroadcastreceived BROADCAST_OPTION=游戏开始
+data_changevariableby VARIABLE=分数 VALUE=-1
+
+@script flag
+procedures_definition PROCCODE="移动 %s 步" ARGS=[步数]
+  argument_reporter_string_number VALUE=步数
+  motion_movesteps STEPS=(argument_reporter_string_number VALUE=步数)
+)";
+    SbcFile real = sbcParse(sample);
+    std::printf("解析内联真实样例…\n");
     dumpAst(real);
     if (!real.ok()) {
         ++g_fail;
