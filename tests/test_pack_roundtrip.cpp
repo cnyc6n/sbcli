@@ -39,7 +39,11 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#ifdef _WIN32
 #include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <set>
 #include <sstream>
 #include <string>
@@ -100,8 +104,13 @@ static std::string makeTempRoot() {
     std::error_code ec;
     fs::create_directories(base, ec);
     auto now = std::chrono::system_clock::now().time_since_epoch().count();
+#ifdef _WIN32
+    long pidVal = _getpid();
+#else
+    long pidVal = (long)::getpid();
+#endif
     std::string dir = base + "/sbtest_" + std::to_string(now) + "_" +
-                      std::to_string(_getpid());
+                      std::to_string(pidVal);
     fs::create_directories(dir, ec);
     return dir;
 }
