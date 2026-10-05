@@ -12,6 +12,7 @@
 #include "sb3_tables.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <filesystem>
 #include <fstream>
 #include <functional>
