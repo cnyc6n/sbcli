@@ -65,7 +65,7 @@ struct FileHandle {
 #endif
     }
 
-    size_t readAt(mz_uint64 offset, void* pBuf, size_t n) const {
+    size_t readAt(mz_uint64 offset, void* pBuf, size_t n) {
 #ifdef _WIN32
         if (h == INVALID_HANDLE_VALUE) return 0;
         if (offset >= (mz_uint64)size.QuadPart) return 0;
