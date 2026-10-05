@@ -25,19 +25,19 @@ jobs:
 
       - name: 构建测试套件
         run: |
-          cmake --build build --target sb_parser_test -j $(nproc) || true
-          cmake --build build --target sb_parser_test2 -j $(nproc) || true
-          cmake --build build --target sb_fix_test -j $(nproc) || true
-          cmake --build build --target sb_pack_test -j $(nproc) || true
+          cmake --build build --target sb_parser_test -j $(nproc)
+          cmake --build build --target sb_parser_test2 -j $(nproc)
+          cmake --build build --target sb_fix_test -j $(nproc)
+          cmake --build build --target sb_pack_test -j $(nproc)
 
       - name: 运行测试
         run: |
           set +e
           for t in sb_parser_test sb_parser_test2 sb_fix_test sb_pack_test; do
-            if [ -f "build/$t" ]; then
-              ./build/$t
-              echo "$t exit=$?"
-            fi
+            ./build/$t
+            code=$?
+            echo "$t exit=$code"
+            if [ $code -ne 0 ]; then exit 1; fi
           done
 
       - name: 冒烟测试
