@@ -29,7 +29,7 @@ JSON 解析基于 [simdjson](https://github.com/simdjson/simdjson)（只读 DOM�
 | `refs`   | 变量/列表读写交叉引用（谁在哪个脚本里设置/读取/追加；**同名变量标注 全局/局部·角色**） |
 | `events` | 广播拓扑（谁发、谁收；孤儿广播标注 ⚠） |
 | `diff`   | 版本对比（角色/积木/变量差异；默认折叠摘要，`--detail`/`--by-sprite` 展开明细） |
-| `dup`    | 相似角色检测（复制粘贴拼贴作品：按积木结构 Jaccard 相似度分组，`--limit N` 设阈值 %） |
+| `dup`    | 相似角色检测（复制粘贴拼贴作品：按积木结构 Jaccard 相似度分组，`--threshold N` 设阈值 %，`--limit N` 限每组条数） |
 
 ### 项目级工具链
 
@@ -49,8 +49,10 @@ JSON 解析基于 [simdjson](https://github.com/simdjson/simdjson)（只读 DOM�
 > 项目目录结构：`meta.sbcli`（元数据）+ `character/*/block.sbcli`（手写脚本）+ `assets/`。
 > `block.sbcli` 用缩进的英文 opcode 语法，参数用 SB3 真实字段名
 > （如 `data_setvariableto VARIABLE=分数 VALUE=0`），`(...)`/`<...>` 表示 reporter 嵌套。
+> 完整格式规范见 **`docs/format.md`**（词法/作用域/meta/round-trip 规则）。
 > 只有 `block.sbcli` 需要人写，`meta.sbcli` 交给 `sb fix` 自动维护。
-> `info`/`sprites`/`script`/`vars` 也能**直接读项目目录**（不必先打包）。
+> `info`/`sprites`/`script`/`vars`/`refs`/`events`/`text`/`blocks` 都能**直接读项目目录**（不必先打包），
+> `find --dir` 也会搜索项目目录里的 block.sbcli。
 > 示例：`sb unpack 作品.sb3 我的项目` → 手改 `block.sbcli` → `sb check 我的项目`
 > → `sb fix 我的项目` → `sb pack 我的项目 新版.sb3`。
 
