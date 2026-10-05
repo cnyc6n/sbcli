@@ -92,7 +92,15 @@ std::vector<FindHit> sb3FindInFile(const std::string& p,
     std::vector<FindHit> out;
     // 预筛 + 精确搜索共用同一个 Reader：先解压 project.json 文本粗查，
     // 不命中直接跳过（省 DOM 解析）；命中再用同一 Reader 走精确路径。
-    mzip::Reader r(p);
+    // 注意：Reader 构造会抛 ZipError（文件打不开 / 不是 zip）——必须捕获，
+    // 否则异常逃出多线程 worker 会 std::terminate 崩溃。
+    std::unique_ptr<mzip::Reader> rPtr;
+    try {
+        rPtr = std::make_unique<mzip::Reader>(p);
+    } catch (const std::exception&) {
+        return out;
+    }
+    mzip::Reader& r = *rPtr;
     std::string entry;
     {
         auto names = r.names();
@@ -117,9 +125,9 @@ std::vector<FindHit> sb3FindInFile(const std::string& p,
 
     Sb3File sf;
     try {
-        // 借用已打开的 Reader（r 在函数作用域内存活，noop deleter 不释放）
+        // 借用已打开的 Reader（rPtr 在函数作用域内存活，noop deleter 不释放）
         sf = sb3LoadFromReader(
-            std::shared_ptr<mzip::Reader>(&r, [](mzip::Reader*) {}), p);
+            std::shared_ptr<mzip::Reader>(rPtr.get(), [](mzip::Reader*) {}), p);
     } catch (const Sb3Error&) {
         return out;
     }

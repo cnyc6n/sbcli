@@ -180,6 +180,23 @@ std::string blockExpr(UnpackCtx& c, const std::string& id, bool* ok);
 std::string paramsText(UnpackCtx& c, const Elem& b, const std::string& op, bool skipSubstack);
 
 // 影子数组 [type, value] → 标量文本
+// 菜单桩块判定：Scratch 原生菜单桩（固定名单）+ 扩展菜单桩（opcode 含 "_menu_"）。
+// 用途：unpack 遇到「父块 input 引用一个菜单桩」时，输出 reporter 形态而非裸值，
+// 使 pack 能对称重建桩块（保持块结构与原作品一致）。
+bool isMenuStubOpcode(const std::string& op) {
+    if (op.empty()) return false;
+    static const std::set<std::string> kNative = {
+        "looks_costume", "looks_backdrops", "sound_sounds_menu",
+        "sensing_touchingobjectmenu", "sensing_distancetomenu", "sensing_keyoptions",
+        "control_create_clone_of_menu", "motion_goto_menu", "motion_pointtowards_menu",
+        "sensing_of_object_menu",
+    };
+    if (kNative.count(op)) return true;
+    if (op.find("_menu_") != std::string::npos) return true;   // 扩展菜单桩
+    if (op.rfind("menu_", 0) == 0) return true;
+    return false;
+}
+
 std::string shadowText(UnpackCtx& c, const Elem& x) {
     if (!x.is_array() || x.empty()) return x.ok() ? rawJsonOf(x) : "?";
     int t = x.op(0).is_number() ? (int)x.op(0).i64() : 0;
@@ -235,6 +252,36 @@ std::string shadowText(UnpackCtx& c, const Elem& x) {
     }
 }
 
+// 菜单桩块 → reporter 文本：`(stubOpcode FIELD=值)`。
+// 供 case 1（内联 shadow 引用）与 case 3（obscured shadow 第三元素）共用。
+// 返回空表示"不是菜单桩或无法读取"（调用方回退到其它处理）。
+std::string menuStubReporterText(UnpackCtx& c, const std::string& blockId) {
+    auto it = c.blocks.find(blockId);
+    if (it == c.blocks.end()) return std::string();
+    const Elem& mb = it->second;
+    if (!isMenuStubOpcode(opcodeOf(mb))) return std::string();
+    Elem mf = mb.at("fields");
+    if (!mf.is_object()) return std::string();
+    auto keys = sortedKeysOf(mf.obj());
+    if (keys.empty()) return std::string();
+    Elem fv = mf.at(keys[0]);
+    Elem first = (fv.is_array() && !fv.empty()) ? fv.op(0) : fv;
+    if (first.is_string()) {
+        std::string nm(first.sv());
+        if (nm.empty() && fv.is_array() && fv.size() > 1 && fv.op(1).is_string()) {
+            std::string id2(fv.op(1).sv());
+            auto vit = c.varNames.find(id2);
+            if (vit != c.varNames.end()) nm = vit->second;
+            else {
+                auto bt2 = c.bcastNames.find(id2);
+                if (bt2 != c.bcastNames.end()) nm = bt2->second;
+            }
+        }
+        return "(" + opcodeOf(mb) + " " + keys[0] + "=" + literalText(nm, false) + ")";
+    }
+    return std::string();
+}
+
 // 一个 input 槽 → 参数值文本
 std::string inputText(UnpackCtx& c, const Elem& arr) {
     if (!arr.is_array() || arr.empty()) return arr.ok() ? rawJsonOf(arr) : "?";
@@ -247,6 +294,12 @@ std::string inputText(UnpackCtx& c, const Elem& arr) {
             // 后者要沿引用取出 menu 块的字段值，否则会把 block id 当值写出去。
             if (v.is_string()) {
                 std::string s(v.sv());
+                // menu 桩块（shadow: true 且是菜单类 opcode）：
+                // 输出 reporter 形态 `(stubOpcode FIELD=值)`，让 pack 能对称重建桩块。
+                // 若只输出裸值，pack 就不知道这里原本有桩（会写成内联 fields），
+                // 导致桩块丢失、块数与原作品不一致。
+                std::string rep = menuStubReporterText(c, s);
+                if (!rep.empty()) return rep;
                 auto bit = c.blocks.find(s);
                 if (bit != c.blocks.end()) {
                     Elem mb = bit->second;
@@ -290,10 +343,20 @@ std::string inputText(UnpackCtx& c, const Elem& arr) {
             if (v.is_array()) return shadowText(c, v);
             return "?";
         case 3:
+            // [3, 主块, 阴影桩] —— obscured shadow（VM 的 INPUT_DIFF_BLOCK_SHADOW）。
+            // VM 语义（见 scratch-vm sb3.js deserializeInputs）：
+            //   block  = 主块（input.block，执行用）
+            //   shadow = 阴影桩（input.shadow，仅 UI 默认值；主块存在时被遮挡）
+            // 因此：**主块优先输出**（reporter 形态）；主块不存在时才回退阴影桩。
+            // 主块引用（字符串）：blockExpr 展开成 reporter
             if (v.is_string()) {
                 bool ok = false;
                 std::string s = blockExpr(c, std::string(v.sv()), &ok);
                 if (ok) return s;
+                // 主块展开失败（悬垂引用）：若阴影桩是菜单桩，用它的 reporter 形态
+                std::string rep = (arr.size() > 2 && arr.op(2).is_string())
+                    ? menuStubReporterText(c, std::string(arr.op(2).sv())) : std::string();
+                if (!rep.empty()) return rep;
             }
             if (v.is_array()) return shadowText(c, v);
             return "?";
@@ -328,7 +391,8 @@ std::string fieldText(UnpackCtx& c, const Elem& f) {
 // 变量/列表 field 的 [名, id]：默认只留名字（id 由 sbcVarId 重算，与 pack 天然一致）。
 // 例外：当同名变量在**全局与当前角色都存在**时（Scratch 允许），名字不足以消歧，
 // 必须按 id 输出 `@local:名` / `@global:名`，否则重打包会指向同一个变量 → 数据串位。
-std::string varFieldText(UnpackCtx& c, const std::string& value) {
+std::string varFieldText(UnpackCtx& c, const std::string& value,
+                         const std::string& fallbackName = std::string()) {
     // 不做 looksLikeId 前置过滤：变量 id 不一定是纯 hex（sb2 用 @v@xxx 形式），
     // 过滤会漏掉映射、把 id 当名字输出（曾造成 round-trip 回归）。
     {
@@ -363,6 +427,11 @@ std::string varFieldText(UnpackCtx& c, const std::string& value) {
             return nm;
         }
     }
+    // 查表失败（id 悬空，如作者跨项目复制残留）：回退用 field[0] 的名字——
+    // sb3 语义里 [名, id] 的**名字才是权威显示值**（Scratch 按名字解析），
+    // 直接返回 id 串会把悬空 id 当名字写进 meta（污染列表/变量名，曾造成
+    // Paper Minecraft 等作品 13 个角色的列表名变成 `b)ZK/...-list` 这种串）。
+    if (!fallbackName.empty()) return fallbackName;
     return value;
 }
 
@@ -403,7 +472,8 @@ std::string paramsText(UnpackCtx& c, const Elem& b, const std::string& op, bool 
                     id = std::string(fv.op(1).sv());
                 std::string nm = val;
                 if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"') nm = unquoteStr(nm);
-                std::string res = varFieldText(c, id.empty() ? nm : id);
+                // 传 id 优先、名字作回退：id 悬空时用 field[0] 的名字（见 varFieldText）
+                std::string res = varFieldText(c, id.empty() ? nm : id, nm);
                 // `@local:名` / `@global:名` 是解析器认识的语法标记，不加引号输出；
                 // 其余含特殊字符的名字仍走 literalText 的引号规则。
                 if (res.rfind("@local:", 0) == 0 || res.rfind("@global:", 0) == 0)
@@ -848,6 +918,23 @@ std::string assetEntryName(const Elem& obj) {
     return v.empty() ? std::string() : v[0];
 }
 
+// 造型/声音列表 → `[名: assets/x.svg, …]`
+//
+// 为什么不用 cm::renderAssets：它把 `名` 裸写。素材名可以含 meta 的特殊字符——
+// 实测 Paper Minecraft 里有个造型就叫 `#`，裸写成 `costumes: [#: assets/…]` 后，
+// meta 解析器会把 `#` 起的内容整段当注释吞掉，解析出的路径变成垃圾，
+// 连累 `sb pack` 直接报「找不到文件：<项目根>\」而完全无法打包。
+// 所以这里对名字走 quoteIfNeeded（与 renderNames 一致），路径同样加引号保护。
+std::string renderAssetsQuoted(const std::map<std::string, std::string>& m) {
+    std::string out;
+    for (const auto& kv : m) {
+        if (!out.empty()) out += ", ";
+        out += cm::quoteIfNeeded(kv.first);
+        if (!kv.second.empty()) out += ": " + cm::quoteIfNeeded(kv.second);
+    }
+    return "[" + out + "]";
+}
+
 // 在 zip 里找条目（大小写不敏感 + 兜底 assets/ 前缀）
 std::string resolveZipEntry(const mzip::Reader& zip, const std::string& want) {
     if (want.empty()) return std::string();
@@ -1238,7 +1325,10 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
         }
 
         std::vector<std::string> ml;
-        ml.push_back("name: " + (p.name.empty() ? std::string("Sprite") : p.name));
+        // name 可能含 # / 冒号 / 空格（Gandi 模块名如 `#modules/非线性`）——需要时加引号，
+        // 否则 meta 解析器会把 # 后的内容当注释吞掉（模块 target 名变空）。
+        ml.push_back("name: " + cm::quoteIfNeeded(
+            p.name.empty() ? std::string("Sprite") : p.name));
         ml.push_back("is_stage: " + std::string(p.isStage ? "true" : "false"));
         ml.push_back("x: " + kv["x"]);
         ml.push_back("y: " + kv["y"]);
@@ -1249,8 +1339,8 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
         ml.push_back("rotation_style: " + kv["rotation_style"]);
         ml.push_back("layer_order: " + kv["layer_order"]);
         ml.push_back("draggable: " + kv["draggable"]);
-        ml.push_back("costumes: "   + cm::renderAssets(meta.costumes));
-        ml.push_back("sounds: "     + cm::renderAssets(meta.sounds));
+        ml.push_back("costumes: "   + renderAssetsQuoted(meta.costumes));
+        ml.push_back("sounds: "     + renderAssetsQuoted(meta.sounds));
         ml.push_back("variables: "  + cm::renderVariables(localVars));
         ml.push_back("lists: "      + cm::renderLists(localLists));
         ml.push_back("broadcasts: " + cm::renderNames(meta.broadcasts, false));

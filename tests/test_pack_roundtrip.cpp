@@ -709,20 +709,44 @@ operator_random FROM=1 TO=10
     CHECK(sp.ok());
     auto blocks = collectBlocks(sp);
 
-    // KEY_OPTION / STOP_OPTION / TOUCHINGOBJECTMENU 都应在 fields（不是 inputs）
-    for (const char* op : {"event_whenkeypressed", "control_stop", "sensing_touchingobject"}) {
-        std::string id = findBlockId(blocks, op);
-        CHECK_MSG(!id.empty(), (std::string("缺 opcode: ") + op).c_str());
-        sb::Elem b = blocks[id];
-        // fields 存在对应键
-        CHECK_MSG(b.at("fields").at("KEY_OPTION").ok() ||
-                  b.at("fields").at("STOP_OPTION").ok() ||
-                  b.at("fields").at("TOUCHINGOBJECTMENU").ok() ||
-                  b.at("fields").at("COSTUME").ok(),
-                  (std::string("菜单键应出现在 fields: ") + op).c_str());
-        // 且不应在 inputs 里有同名键（菜单值应进 field）
+    // 菜单字段归类（依据 69 个真实作品实测形态）
+    //
+    //  a) 帽子块/自带字段块：值在**块自身 fields**
+    //     event_whenkeypressed.KEY_OPTION      真实作品 523/523 全在 fields
+    //     control_stop.STOP_OPTION             4956/4956 全在 fields
+    //  b) 普通菜单块：值是 inputs 引用一个 shadow 菜单桩，桩自己持 fields
+    //     sensing_touchingobject.TOUCHINGOBJECTMENU 3657/3657 在 inputs
+    //     looks_switchcostumeto.COSTUME             8381/8381 在 inputs
+    {
+        // a) 帽子块：KEY_OPTION 在自身 fields，且不应有同名 inputs
+        std::string idKey = findBlockId(blocks, "event_whenkeypressed");
+        CHECK_MSG(!idKey.empty(), "缺 opcode: event_whenkeypressed");
+        if (!idKey.empty()) {
+            sb::Elem b = blocks[idKey];
+            CHECK_MSG(b.at("fields").at("KEY_OPTION").ok(),
+                      "event_whenkeypressed 的 KEY_OPTION 应在 fields");
+            CHECK_MSG(!b.at("inputs").at("KEY_OPTION").ok(),
+                      "event_whenkeypressed 不应同时有 inputs.KEY_OPTION");
+        }
+        // control_stop：STOP_OPTION 在 fields
+        std::string idStop = findBlockId(blocks, "control_stop");
+        CHECK_MSG(!idStop.empty(), "缺 opcode: control_stop");
+        if (!idStop.empty()) {
+            CHECK_MSG(blocks[idStop].at("fields").at("STOP_OPTION").ok(),
+                      "control_stop 的 STOP_OPTION 应在 fields");
+        }
+        // b) sensing_touchingobject：TOUCHINGOBJECTMENU 在 inputs（引用菜单桩）
+        std::string idTouch = findBlockId(blocks, "sensing_touchingobject");
+        CHECK_MSG(!idTouch.empty(), "缺 opcode: sensing_touchingobject");
+        if (!idTouch.empty()) {
+            sb::Elem b = blocks[idTouch];
+            CHECK_MSG(b.at("inputs").at("TOUCHINGOBJECTMENU").ok(),
+                      "sensing_touchingobject 的 TOUCHINGOBJECTMENU 应在 inputs");
+            CHECK_MSG(!b.at("fields").at("TOUCHINGOBJECTMENU").ok(),
+                      "sensing_touchingobject 不应把 TOUCHINGOBJECTMENU 写进 fields");
+        }
     }
-    // COSTUME 菜单：looks_switchcostumeto 的 COSTUME 在 SB3 里其实是 input（引用 menu 块），
+    // COSTUME 菜单：looks_switchcostumeto 的 COSTUME 在 SB3 里是 input（引用 menu 块），
     // 这里只验证它不丢数据：翻译能出来造型名。
     CHECK_MSG(scriptContains(sp, "造型1"), "应能翻译出造型名");
     CHECK_MSG(scriptContains(sp, "空格") || scriptContains(sp, "space"),

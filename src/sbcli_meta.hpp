@@ -93,8 +93,48 @@ inline bool copyFileTo(const std::string& from, const std::string& to) {
 }
 inline std::string unquote(std::string s) {
     s = trimStr(s);
-    if (s.size() >= 2 && s.front() == '"' && s.back() == '"') return s.substr(1, s.size() - 2);
+    if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
+        // 解转义：\" \\ \n（与 quoteIfNeeded 对称）
+        std::string body = s.substr(1, s.size() - 2);
+        std::string out;
+        for (size_t i = 0; i < body.size(); ++i) {
+            if (body[i] == '\\' && i + 1 < body.size()) {
+                char n = body[i + 1];
+                if (n == '"') { out += '"'; i += 2; continue; }
+                if (n == '\\') { out += '\\'; i += 2; continue; }
+                if (n == 'n') { out += '\n'; i += 2; continue; }
+            }
+            out += body[i];
+        }
+        return out;
+    }
     return s;
+}
+// 值需要加引号吗？含注释符 #、列表/花括号分隔符、逗号、冒号、引号，或有首尾空格时
+// （Gandi 的模块名形如 `#modules/非线性`，裸写会被当注释吞掉）
+inline bool metaValueNeedsQuote(const std::string& s) {
+    if (s.empty()) return false;
+    if (s.front() == ' ' || s.back() == ' ' || s.front() == '\t' || s.back() == '\t')
+        return true;
+    for (char c : s) {
+        if (c == '#' || c == ',' || c == ':' || c == '"' || c == '[' || c == ']' ||
+            c == '{' || c == '}' || c == '=' || c == '\n' || c == '\r')
+            return true;
+    }
+    return false;
+}
+// 需要时包双引号（并转义内部引号）
+inline std::string quoteIfNeeded(const std::string& s) {
+    if (!metaValueNeedsQuote(s)) return s;
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        if (c == '\n') { out += "\\n"; continue; }
+        if (c == '\r') continue;
+        out += c;
+    }
+    out += '"';
+    return out;
 }
 // 去掉包裹符并按逗号切开（不处理引号内的逗号——meta 里足够用）
 inline std::vector<std::string> splitListBody(const std::string& raw) {
@@ -125,7 +165,7 @@ inline std::string renderNames(const std::set<std::string>& s, bool braces) {
     std::string out;
     for (const auto& n : s) {
         if (!out.empty()) out += ", ";
-        out += n;
+        out += quoteIfNeeded(n);      // 含 # / 逗号等特殊字符的名字加引号
     }
     return braces ? ("{" + out + "}") : ("[" + out + "]");
 }
@@ -207,10 +247,19 @@ inline CharMeta loadCharMeta(const std::string& path) {
         }
         s = trimStr(s);
         if (s.empty()) continue;
-        size_t colon = s.find(':');
+        // 冒号切分要引号感知：`name: "Stage: ii"` 的冒号在引号内，不能当分隔符
+        size_t colon = std::string::npos;
+        {
+            bool inQ = false;
+            for (size_t i = 0; i < s.size(); ++i) {
+                if (s[i] == '"') { inQ = !inQ; continue; }
+                if (s[i] == ':' && !inQ) { colon = i; break; }
+            }
+        }
         if (colon == std::string::npos) continue;
         std::string key = trimStr(s.substr(0, colon));
-        std::string val = trimStr(s.substr(colon + 1));
+        // 值需要 unquote（引号是 meta 的转义语法，不是内容的一部分）
+        std::string val = unquote(trimStr(s.substr(colon + 1)));
         m.kv[key] = val;
 
         if (key == "variables" || key == "lists") {

@@ -147,7 +147,15 @@ std::vector<uint8_t> readFileBinary(const std::string& path) {
 void writeFileBinary(const std::string& path, const uint8_t* data, size_t n) {
     std::ofstream f(wpath(path), std::ios::binary);
     if (!f) throw Sb1Error("无法写文件：" + path);
-    f.write(reinterpret_cast<const char*>(data), (std::streamsize)n);
+    if (n > 0)
+        f.write(reinterpret_cast<const char*>(data), (std::streamsize)n);
+    f.flush();
+    // 必须检查写入/刷盘结果：磁盘满、配额超限、介质错误时 write 会失败但
+    // 不抛异常（曾经：磁盘满 → 写出 0 字节的 .sb3，而 pack 仍报"成功"）。
+    if (!f || f.fail()) {
+        f.close();
+        throw Sb1Error("写入文件失败（可能磁盘空间不足）：" + path);
+    }
 }
 
 bool isFile(const std::string& path) {

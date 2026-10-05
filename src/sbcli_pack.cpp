@@ -152,6 +152,9 @@ const std::set<std::string>& menuFieldKeys() {
             "FRONT_BACK", "FORWARD_BACKWARD", "POSITION", "DIRECTION", "STOP_OPTION2",
             "SCALE", "CURRENTMENU", "SUBSECOND", "CLICK_OPTION", "BOOLEAN",
             "MOTION_OPTION",
+            // 运动/侦测的菜单槽：motion_goto.TO → motion_goto_menu、
+            // motion_pointtowards.TOWARDS → motion_pointtowards_menu（实测键名）
+            "TO", "TOWARDS",
         };
         for (auto k : extra) keys.insert(k);
         return keys;
@@ -169,6 +172,9 @@ struct PackCtx {
     std::set<std::string> localVars;         // 本角色私有变量名（局部优先解析用）
     std::set<std::string> localLists;        // 本角色私有列表名
     std::set<std::string>* missing = nullptr;// 未知 opcode 统计（可为空）
+    // 当前正在生成的块 id：emitReporterBlock 生成子 reporter 时要回填 parent，
+    // 否则 reporter 的 parent 为 null（Scratch 打开时输入挂不上 → 参数丢失）。
+    std::string parentId;
     long long counter = 0;
     std::string newId() { return "b" + std::to_string(++counter); }
 };
@@ -177,7 +183,119 @@ struct PackCtx {
 Json encodeValue(const SbcValue& val, PackCtx& ctx);
 std::string emitReporterBlock(const SbcValue& val, PackCtx& ctx);
 void routeParam(Json& b, const SbcParam& p, PackCtx& ctx,
-                const std::string& opcode = "");
+                const std::string& opcode = "",
+                const std::string& blockId = "");
+
+// 帽子块（hat）里，有些 opcode 的值就存在**块自身 fields**（不是菜单桩）：
+//   event_whenkeypressed.KEY_OPTION        —— 真实作品实测 523/523 全在 fields
+//   event_whenbroadcastreceived.BROADCAST_OPTION —— 12434/12434 全在 fields
+//   control_stop.STOP_OPTION               —— 4956/4956 全在 fields
+// 这些块**不能**做桩转换（否则会同时写出 fields 和 inputs 两个同名键，
+// 出现重复冗余、偏离 Scratch 标准结构）。
+bool isHatWithOwnField(const std::string& op) {
+    static const std::set<std::string> s = {
+        "event_whenkeypressed",
+        "event_whenbroadcastreceived",
+        "event_whenbackdropswitchesto",
+        "event_whengreaterthan",
+        "control_stop",
+    };
+    return s.count(op) != 0;
+}
+
+// 桩 opcode 判定（与 unpack 侧 isMenuStubOpcode 对称）：用于识别 unpack 输出的
+// reporter 形态 `(pen_menu_colorParam colorParam="color")` 是不是一个菜单桩。
+bool isMenuStubOpcodeName(const std::string& op) {
+    if (op.empty()) return false;
+    static const std::set<std::string> kNative = {
+        "looks_costume", "looks_backdrops", "sound_sounds_menu",
+        "sensing_touchingobjectmenu", "sensing_distancetomenu", "sensing_keyoptions",
+        "control_create_clone_of_menu", "motion_goto_menu", "motion_pointtowards_menu",
+        "sensing_of_object_menu", "pen_menu_colorParam",
+    };
+    if (kNative.count(op)) return true;
+    if (op.find("_menu_") != std::string::npos) return true;
+    if (op.rfind("menu_", 0) == 0) return true;
+    return false;
+}
+
+// 从 reporter 形态的菜单桩值里取出「值」与「桩字段键」。
+// 形态：SbcValue::Reporter，其 params 里只有一项（字段键 → 值）。
+std::string stubValueOf(const SbcValue& v, std::string* fieldKeyOut) {
+    if (!v.args.empty() && v.args[0].value &&
+        v.args[0].value->kind == SbcValue::Kind::Scalar) {
+        if (fieldKeyOut) {
+            const std::string& k = v.args[0].canon.empty() ? v.args[0].key
+                                                           : v.args[0].canon;
+            *fieldKeyOut = k;
+        }
+        return v.args[0].value->scalar.text;
+    }
+    return std::string();
+}
+
+// 菜单字段 → shadow 桩块 opcode。返回空表示"不生成桩"（用内联 fields 即可）。
+// 映射依据：真实作品实测（桩块 parent / 槽键 / 桩 fields 键）
+//   sensing_keypressed.KEY_OPTION        → sensing_keyoptions       (fields KEY_OPTION)
+//   motion_goto.TO                       → motion_goto_menu         (fields TO)
+//   motion_pointtowards.TOWARDS          → motion_pointtowards_menu (fields TOWARDS)
+//   sensing_of.OBJECT                    → sensing_of_object_menu   (fields OBJECT)
+//   looks_switchcostumeto.COSTUME        → looks_costume
+//   sound_play.SOUND_MENU                → sound_sounds_menu
+//   control_create_clone_of.CLONE_OPTION → control_create_clone_of_menu
+//   pen_*.COLOR_PARAM                    → pen_menu_colorParam      (桩 fields 键为 colorParam)
+std::string menuStubOpcode(const std::string& parentOp, const std::string& fieldKey) {
+    // 先查"opcode+key 联合"的桩槽白名单（真实作品矩阵）——
+    // 这决定了"这个槽在 Scratch 里是不是菜单桩引用"。
+    // 不在白名单里的（如 operator_random.TO）绝不是桩，返回空 → 内联 fields。
+    static const std::map<std::string, std::string> native = {
+        {"COSTUME",           "looks_costume"},
+        {"BACKDROP",          "looks_backdrops"},
+        {"SOUND_MENU",        "sound_sounds_menu"},
+        {"TOUCHINGOBJECTMENU","sensing_touchingobjectmenu"},
+        {"DISTANCETOMENU",    "sensing_distancetomenu"},
+        {"KEY_OPTION",        "sensing_keyoptions"},
+        {"CLONE_OPTION",      "control_create_clone_of_menu"},
+        {"TO",                "motion_goto_menu"},
+        {"TOWARDS",           "motion_pointtowards_menu"},
+        {"OBJECT",            "sensing_of_object_menu"},
+    };
+    // opcode 约束：同一个 key 在不同 opcode 上语义完全不同
+    // （motion_goto.TO = 菜单；operator_random.TO = 普通数字入参）
+    static const std::map<std::string, std::set<std::string>> kOpSlots = {
+        {"looks_switchcostumeto",  {"COSTUME"}},
+        {"looks_costume",          {"COSTUME"}},
+        {"looks_switchbackdropto", {"BACKDROP"}},
+        {"looks_backdrops",        {"BACKDROP"}},
+        {"sound_play",             {"SOUND_MENU"}},
+        {"sound_playuntildone",    {"SOUND_MENU"}},
+        {"motion_goto",            {"TO"}},
+        {"motion_glideto",         {"TO"}},
+        {"motion_pointtowards",    {"TOWARDS"}},
+        {"sensing_touchingobject", {"TOUCHINGOBJECTMENU"}},
+        {"sensing_distanceto",     {"DISTANCETOMENU"}},
+        {"sensing_keypressed",     {"KEY_OPTION"}},
+        {"sensing_of",             {"OBJECT"}},
+        {"control_create_clone_of",{"CLONE_OPTION"}},
+        {"pen_setPenColorParamTo",    {"COLOR_PARAM"}},
+        {"pen_changePenColorParamBy", {"COLOR_PARAM"}},
+    };
+    auto osIt = kOpSlots.find(parentOp);
+    if (osIt == kOpSlots.end() || !osIt->second.count(fieldKey)) {
+        // 不是桩槽（原生内联菜单如 operator_mathop.OPERATOR / 普通入参如 operator_random.TO）
+        // 注意：**不给未知扩展块自动造桩**——那会凭空生成原文件里不存在的桩
+        // （如 witCat.dollyPro_menu_PROPERTY ×19，真实作品里没有）。
+        // 扩展块有桩的，unpack 会输出 reporter 形态，routeParam 用 reporter 的 opcode
+        // 直接当桩名，不需要这里的命名约定。
+        return std::string();
+    }
+    // pen 扩展的 COLOR_PARAM → pen_menu_colorParam（桩字段键为小写 colorParam）
+    if (fieldKey == "COLOR_PARAM" && parentOp.rfind("pen_", 0) == 0)
+        return "pen_menu_colorParam";
+    auto it = native.find(fieldKey);
+    if (it != native.end()) return it->second;
+    return std::string();
+}
 
 // 把一个值翻译成「输入编码」（标量→内联影子；reporter→新块引用；列表→文本退化）
 Json encodeValue(const SbcValue& val, PackCtx& ctx) {
@@ -211,7 +329,8 @@ std::string emitReporterBlock(const SbcValue& val, PackCtx& ctx) {
     Json b = Json::object();
     b["opcode"]   = op;
     b["next"]     = Json();
-    b["parent"]   = Json();
+    // parent 回填：reporter 被哪个块引用（Scratch 靠 parent 把输入挂到父块上）
+    b["parent"]   = ctx.parentId.empty() ? Json() : Json(ctx.parentId);
     b["inputs"]   = Json::object();
     b["fields"]   = Json::object();
     b["shadow"]   = false;
@@ -227,10 +346,21 @@ std::string emitReporterBlock(const SbcValue& val, PackCtx& ctx) {
         b["fields"]["VALUE"] = Json::array();
         b["fields"]["VALUE"].push_back(nm ? *nm : std::string());
         b["shadow"] = true;
+    } else if (op == "ccw_hat_parameter") {
+        // CCW 扩展的「帽子参数定义块」：shadow=true + fields.VALUE（与 argument_reporter
+        // 同类）。unpack 输出 reporter 形态 (ccw_hat_parameter VALUE="senderID")，
+        // 这里还原成 shadow 参数块，否则扩展块的自定义参数在 Scratch 里显示异常。
+        const std::string* nm = nullptr;
+        if (!val.args.empty() && val.args[0].value &&
+            val.args[0].value->kind == SbcValue::Kind::Scalar)
+            nm = &val.args[0].value->scalar.text;
+        b["fields"]["VALUE"] = Json::array();
+        b["fields"]["VALUE"].push_back(nm ? *nm : std::string());
+        b["shadow"] = true;
     } else {
         for (const auto& p : val.args) {
             if (!p.value) continue;
-            routeParam(b, p, ctx);
+            routeParam(b, p, ctx, op, bid);
         }
     }
 
@@ -240,7 +370,7 @@ std::string emitReporterBlock(const SbcValue& val, PackCtx& ctx) {
 
 // 把单个命名参数归位到 block b 的 inputs / fields
 void routeParam(Json& b, const SbcParam& p, PackCtx& ctx,
-                const std::string& opcode) {
+                const std::string& opcode, const std::string& blockId) {
     if (!p.value) return;
     const std::string& key = p.canon.empty() ? p.key : p.canon;
     const SbcValue& pv = *p.value;
@@ -283,12 +413,62 @@ void routeParam(Json& b, const SbcParam& p, PackCtx& ctx,
         b["fields"]["LIST"].push_back(id);
     } else if (key == "BROADCAST_INPUT") {
         b["inputs"]["BROADCAST_INPUT"] = broadcastInput(pv.scalar.text);
-    } else if (menuFieldKeys().count(key) && pv.kind == SbcValue::Kind::Scalar) {
-        // 菜单字段：只有「标量值」才写进 fields。
-        // 若值是 reporter（如 KEY_OPTION=(argument_reporter_string_number VALUE=键)），
-        // 必须走 inputs 生成块引用，否则会把 reporter 的 opcode 当字面菜单值写坏。
+    } else if (menuFieldKeys().count(key) && isHatWithOwnField(opcode)) {
+        // 帽子块自己的字段（KEY_OPTION / BROADCAST_OPTION / STOP_OPTION…）：
+        // 直接写进**块自身 fields**（真实作品：event_whenkeypressed 523/523、
+        // control_stop 4956/4956 都是 fields），**不生成菜单桩、不写 inputs**。
+        // 注意：hatArg 路径（@script key space）也会写同一个 field，这里重复写安全
+        // （同键同值覆盖）；但若脚本里显式写了 KEY_OPTION=space，这里才是唯一来源。
         b["fields"][key] = Json::array();
         b["fields"][key].push_back(pv.scalar.text);
+    } else if (menuFieldKeys().count(key) &&
+               (pv.kind == SbcValue::Kind::Scalar ||
+                (pv.kind == SbcValue::Kind::Reporter &&
+                 isMenuStubOpcodeName(pv.scalar.text)))) {
+        // 菜单字段。行为分两种：
+        //  a) 原文件是「菜单桩引用」的槽（motion_goto.TO、sensing_touchingobject…）
+        //     → 还原成「桩块 + input 引用」（menuStubOpcode 返回桩名）
+        //  b) 原文件是「内联 fields」的原生菜单（operator_mathop.OPERATOR、
+        //     looks_switchcostumeto 的旧形态…）→ 直接写 fields（menuStubOpcode 返回空）
+        // 判断依据在 menuStubOpcode 内部（opcode+key 联合 + 桩名映射表），
+        // 不在这里提前用白名单挡掉 —— 否则 OPERATOR/EFFECT 这类原生菜单会漏进
+        // inputs 分支（真实作品里它们在 fields，见 69 部全量统计）。
+        std::string stubOp = blockId.empty() ? std::string()
+                                             : menuStubOpcode(opcode, key);
+        // reporter 形态：直接用 reporter 的 opcode 当桩名（已是准确名字）
+        std::string stubVal;
+        std::string stubFieldKey;
+        if (pv.kind == SbcValue::Kind::Reporter) {
+            stubOp = pv.scalar.text;
+            stubVal = stubValueOf(pv, &stubFieldKey);
+        } else {
+            stubVal = pv.scalar.text;
+        }
+        if (!stubOp.empty()) {
+            std::string stubId = ctx.newId();
+            Json stub = Json::object();
+            stub["opcode"]   = stubOp;
+            stub["next"]     = Json();
+            stub["parent"]   = Json(blockId);
+            stub["inputs"]   = Json::object();
+            Json sf = Json::object();
+            Json sv = Json::array();
+            sv.push_back(stubVal);
+            // 桩自己的字段键可能与槽键不同（pen 的槽是 COLOR_PARAM、桩字段是 colorParam），
+            // reporter 形态时用 unpack 给出的实际键，标量形态时用槽键。
+            sf[stubFieldKey.empty() ? key : stubFieldKey] = sv;
+            stub["fields"]   = sf;
+            stub["shadow"]   = true;
+            stub["topLevel"] = false;
+            ctx.blocks[stubId] = std::move(stub);
+            Json slot = Json::array();
+            slot.push_back(1);          // kind 1 = 未遮挡的 shadow
+            slot.push_back(stubId);
+            b["inputs"][key] = slot;
+        } else {
+            b["fields"][key] = Json::array();
+            b["fields"][key].push_back(stubVal);
+        }
     } else if (!opcode.empty() && !sbcIsKnownOpcode(opcode)) {
         // 未知/扩展 opcode：文本层无法区分 field 与 input（unpack 都写成 KEY=value），
         // 用启发式避免重打包时分类漂移。
@@ -327,6 +507,16 @@ std::string emitBlock(const SbcBlock& blk, PackCtx& ctx,
                       const std::string& hatArg) {
     const std::string& op = blk.opcode;
     const std::string& bid = ctx.newId();
+
+    // 本块生成期间，ctx.parentId 指向它：emitReporterBlock 生成子 reporter 时
+    // 要把 parent 回填成引用它的块（否则 reporter 的 parent=null，Scratch 挂不上）。
+    struct ParentGuard {
+        PackCtx& c; std::string prev;
+        ParentGuard(PackCtx& c_, const std::string& id) : c(c_), prev(c_.parentId) {
+            c.parentId = id;
+        }
+        ~ParentGuard() { c.parentId = prev; }
+    } parentGuard(ctx, bid);
 
     Json b = Json::object();
     b["opcode"]   = op;
@@ -434,7 +624,7 @@ std::string emitBlock(const SbcBlock& blk, PackCtx& ctx,
                     continue;
                 }
                 // 其余参数（理论上不会有）按名归位
-                routeParam(b, p, ctx);
+                routeParam(b, p, ctx, op, bid);
             }
             ctx.blocks[bid] = std::move(b);
             return bid;
@@ -446,10 +636,38 @@ std::string emitBlock(const SbcBlock& blk, PackCtx& ctx,
             proto["opcode"]   = "procedures_prototype";
             proto["next"]     = Json();
             proto["parent"]   = bid;
-            proto["inputs"]   = Json::object();
+            Json protoInputs = Json::object();
             proto["fields"]   = Json::object();
             proto["shadow"]   = true;
             proto["topLevel"] = false;
+
+            // ★ prototype 的参数占位块：每个 argumentid 对应一个
+            // argument_reporter_string_number（shadow=true），挂在 prototype.inputs 下。
+            // 这是 Scratch 标准结构（scratch-vm sb3.js：parent 为 procedures_prototype
+            // 的 argument_reporter 必须 shadow=true）；缺了会丢参数占位，
+            // 导致 Scratch/Gandi 打开时自定义积木参数显示异常、块数与原作品不一致。
+            for (size_t ai = 0; ai < argIds.size(); ++ai) {
+                const std::string& acid = argIds[ai];
+                std::string repId = ctx.newId();
+                Json rep = Json::object();
+                rep["opcode"]   = "argument_reporter_string_number";
+                rep["next"]     = Json();
+                rep["parent"]   = protoId;
+                rep["inputs"]   = Json::object();
+                Json rfields = Json::object();
+                Json varr = Json::array();
+                varr.push_back(ai < argNames.size() ? argNames[ai] : std::string());
+                rfields["VALUE"] = varr;
+                rep["fields"]   = rfields;
+                rep["shadow"]   = true;
+                rep["topLevel"] = false;
+                ctx.blocks[repId] = std::move(rep);
+                Json slot = Json::array();
+                slot.push_back(1);
+                slot.push_back(repId);
+                protoInputs[acid] = slot;
+            }
+            proto["inputs"]   = protoInputs;
             proto["mutation"] = mutation;
             ctx.blocks[protoId] = std::move(proto);
             b["inputs"]["custom_block"] = refInput(protoId);
@@ -458,7 +676,7 @@ std::string emitBlock(const SbcBlock& blk, PackCtx& ctx,
     } else {
         for (const auto& p : blk.params) {
             if (!p.value) continue;
-            routeParam(b, p, ctx, op);
+            routeParam(b, p, ctx, op, bid);
         }
     }
 
