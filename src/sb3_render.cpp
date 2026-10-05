@@ -192,15 +192,24 @@ std::string Renderer::valueOf(const Elem& b, const std::string& key, bool menu) 
             v = fields.at(key);
             actualKey = key;
         } else {
-            std::string low = key;
-            std::transform(low.begin(), low.end(), low.begin(),
-                           [](unsigned char c) { return (char)::tolower(c); });
-            for (auto f : fields.obj()) {
-                std::string fk = std::string(f.key);
-                std::string fl = fk;
-                std::transform(fl.begin(), fl.end(), fl.begin(),
-                               [](unsigned char c) { return (char)::tolower(c); });
-                if (fl == low) { v = Elem(f.value); actualKey = fk; break; }
+            // 大小写 + 下划线归一后匹配：模板键是大写+下划线（COLOR_PARAM），
+            // 扩展 menu 块的 field 键可能是驼峰小写（colorParam）。
+            // 只转小写不够（color_param ≠ colorparam），必须同时去下划线。
+            auto norm = [](std::string s) {
+                std::string out;
+                for (char c : s) {
+                    if (c == '_') continue;
+                    out += (char)::tolower((unsigned char)c);
+                }
+                return out;
+            };
+            std::string target = norm(key);
+            for (auto& ent : sortedEntriesOf(fields.obj())) {
+                if (norm(std::string(ent.first)) == target) {
+                    v = Elem(ent.second);
+                    actualKey = std::string(ent.first);
+                    break;
+                }
             }
         }
         if (v.ok()) {
