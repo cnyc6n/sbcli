@@ -581,6 +581,9 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
             std::set<std::string> seen;
             for (const auto& p : v.args) {
                 const std::string& key = p.canon.empty() ? p.key : p.canon;
+                // obscured shadow 双键约定（unpack 输出 `KEY=<主块> __shadow_KEY=<桩>`）：
+                // __shadow_ 前缀是保留标记，不是真实参数名，跳过白名单校验。
+                if (p.key.compare(0, 9, "__shadow_") == 0) continue;
                 if (allowed.count(key) == 0 && !fields.empty())
                     emit(line, 0, CheckLevel::Error, "syntax", "unknown-param",
                          "未知参数名「" + p.key + "」（" + vop + " 的参数：" +
@@ -593,12 +596,18 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                 // 引用回收
                 if (!p.value) continue;
                 const SbcValue& pv = *p.value;
+                // obscured shadow 双键（__shadow_KEY）是保留标记，不参与引用校验
+                if (p.key.compare(0, 9, "__shadow_") == 0) continue;
                 if (key == "VARIABLE")                      checkVarName(pv.text(), line);
                 else if (key == "LIST")                     checkListName(pv.text(), line);
                 else if (key == "BROADCAST_INPUT" ||
                          key == "BROADCAST_OPTION")         checkBroadcast(pv.text(), line);
-                else if (key == "COSTUME")                  checkAsset("造型", pv.text(), line);
-                else if (key == "SOUND_MENU")               checkAsset("声音", pv.text(), line);
+                // 造型/声音名只对**字面量**校验；Reporter（如 (operator_join …)、
+                // (looks_costume COSTUME="x")）是动态值或菜单桩，不是资产名。
+                else if (key == "COSTUME" && pv.kind == SbcValue::Kind::Scalar)
+                    checkAsset("造型", pv.text(), line);
+                else if (key == "SOUND_MENU" && pv.kind == SbcValue::Kind::Scalar)
+                    checkAsset("声音", pv.text(), line);
                 if (pv.kind == SbcValue::Kind::Reporter)
                     walkValue(pv, line, depth + 1);
             }
@@ -658,6 +667,9 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                     continue;  // ARG1..N 由结构检查单独校验
                 if (b.opcode == "procedures_definition" && key == "ARGS")
                     continue;
+                // obscured shadow 双键约定：__shadow_ 前缀是保留标记，跳过白名单校验
+                if (p.key.compare(0, 9, "__shadow_") == 0)
+                    continue;
 
                 if (!fields.empty() && allowed.count(key) == 0) {
                     // 欲 literal "值给了不存在的参数" —— 会被丢弃，报 warning 而非 error，
@@ -677,14 +689,17 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                 }
 
                 // 引用回收（含 reporter 里的）
-                if (p.value) {
+                if (p.value && p.key.compare(0, 9, "__shadow_") != 0) {
                     const SbcValue& pv = *p.value;
                     if (key == "VARIABLE")            checkVarName(pv.text(), line);
                     else if (key == "LIST")           checkListName(pv.text(), line);
                     else if (key == "BROADCAST_INPUT" ||
                              key == "BROADCAST_OPTION") checkBroadcast(pv.text(), line);
-                    else if (key == "COSTUME")        checkAsset("造型", pv.text(), line);
-                    else if (key == "SOUND_MENU")     checkAsset("声音", pv.text(), line);
+                    // 造型/声音只对字面量校验（Reporter 是动态值/菜单桩）
+                    else if (key == "COSTUME" && pv.kind == SbcValue::Kind::Scalar)
+                        checkAsset("造型", pv.text(), line);
+                    else if (key == "SOUND_MENU" && pv.kind == SbcValue::Kind::Scalar)
+                        checkAsset("声音", pv.text(), line);
                     if (pv.kind == SbcValue::Kind::Reporter)
                         walkValue(pv, line, 1);
                 }

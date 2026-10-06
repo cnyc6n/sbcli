@@ -1242,6 +1242,12 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
         if (!bc.is_object()) continue;
         for (auto bf : bc.obj()) {
             Elem b(bf.value);
+            // 两种形态：["名字", null]（sb3 标准）或 "名字"（某些导出/移植作品）
+            if (b.is_string()) {
+                std::string nm(b.sv());
+                if (!nm.empty()) allBcasts.insert(nm);
+                continue;
+            }
             if (!b.is_array() || b.empty()) continue;
             Elem n0 = b.op(0);
             if (n0.is_string()) {
@@ -1422,6 +1428,12 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
         if (bc.is_object()) {
             for (auto bf : bc.obj()) {
                 Elem b(bf.value);
+                // 兼容 "名字" 字符串与 ["名字", null] 数组两种形态
+                if (b.is_string()) {
+                    std::string nm(b.sv());
+                    if (!nm.empty()) root.broadcasts.insert(nm);
+                    continue;
+                }
                 if (!b.is_array() || b.empty()) continue;
                 Elem n0 = b.op(0);
                 if (n0.is_string() && !std::string(n0.sv()).empty())

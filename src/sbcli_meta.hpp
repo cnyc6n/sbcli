@@ -399,20 +399,21 @@ inline RootMeta loadRootMeta(const std::string& path) {
 
 inline void writeRootMeta(const std::string& path, const RootMeta& m) {
     std::vector<std::string> out;
-    if (!m.name.empty()) { out.push_back("name: " + m.name); out.push_back(""); }
+    if (!m.name.empty()) { out.push_back("name: " + quoteIfNeeded(m.name)); out.push_back(""); }
     if (!m.variables.empty()) {
         out.push_back("[variables]");
-        for (const auto& kv : m.variables) out.push_back(kv.first + " = " + kv.second);
+        // 变量名可能含 `#`（扩展隐藏变量）/ 空格 / `=`，需加引号，否则被当注释/截断
+        for (const auto& kv : m.variables) out.push_back(quoteIfNeeded(kv.first) + " = " + kv.second);
         out.push_back("");
     }
     if (!m.lists.empty()) {
         out.push_back("[lists]");
-        for (const auto& kv : m.lists) out.push_back(kv.first + " = " + kv.second);
+        for (const auto& kv : m.lists) out.push_back(quoteIfNeeded(kv.first) + " = " + kv.second);
         out.push_back("");
     }
     if (!m.broadcasts.empty()) {
         out.push_back("[broadcasts]");
-        for (const auto& b : m.broadcasts) out.push_back(b);
+        for (const auto& b : m.broadcasts) out.push_back(quoteIfNeeded(b));
         out.push_back("");
     }
     for (const auto& e : m.extra) out.push_back(e);
