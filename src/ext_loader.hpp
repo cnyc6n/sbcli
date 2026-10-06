@@ -2,6 +2,7 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
 
 namespace sb {
 struct Sb3File;
@@ -9,6 +10,10 @@ struct Sb3File;
 struct ExtInfo {
     std::map<std::string, int> blockTypes;        // opcode → 类型（0..3）
     std::map<std::string, std::string> extNames;  // 扩展id → 名称
+    // opcode → 允许的参数名集合（来自 getInfo().blocks[].arguments 的键）
+    std::map<std::string, std::vector<std::string>> blockParams;
+    // opcode → 菜单参数名 → 菜单 id（用于校验菜单值）
+    std::map<std::string, std::map<std::string, std::string>> blockMenus;
     bool tried = false;                            // 是否尝试过（避免重复 spawn）
 };
 

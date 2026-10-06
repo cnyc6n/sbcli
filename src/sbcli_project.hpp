@@ -48,6 +48,11 @@ ProjResult sbcliAddList     (const std::string& project, const std::string& name
                              const std::string& items,   const std::string& scope = "");
 ProjResult sbcliAddBroadcast(const std::string& project, const std::string& name);
 
+// ---- sb project add-extension <项目> <扩展.js | URL> ----
+// 从本地文件或 URL 取扩展源码 → getInfo() 语法检查 → 存 extensions/<id>.js
+// 并在 meta.sbcli 的 [extensions] 段登记。
+ProjResult sbcliAddExtension(const std::string& project, const std::string& src);
+
 // ---------------------------------------------------------------- 辅助
 
 // 列出 character/ 下已有的角色目录（按 id 数字升序；stage 排最前）。

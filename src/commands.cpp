@@ -1394,7 +1394,7 @@ int cmd_project(Args& a) {
     //   sb project <目录> init [名字]      → a.file=<目录>, extra=[init, 名字]
     static const std::set<std::string> SUBS = {
         "init", "add-sprite", "add-costume", "add-sound",
-        "add-variable", "add-list", "add-broadcast",
+        "add-variable", "add-list", "add-broadcast", "add-extension",
     };
     std::string sub;
     std::vector<std::string> rest;
@@ -1407,7 +1407,15 @@ int cmd_project(Args& a) {
     } else {
         proj = a.file;
         sub = a.extra.empty() ? "" : a.extra[0];
-        rest.assign(a.extra.begin() + 1, a.extra.end());
+        // a.extra 为空时不能 begin()+1（越界 → assign 巨量 size 崩溃）
+        if (a.extra.size() > 1) rest.assign(a.extra.begin() + 1, a.extra.end());
+    }
+
+    if (sub.empty()) {
+        std::cerr << "用法：sb project <子命令> <项目目录> [参数...]\n"
+                     "子命令：init / add-sprite / add-costume / add-sound /\n"
+                     "        add-variable / add-list / add-broadcast / add-extension\n";
+        return 2;
     }
 
     auto show = [](const ProjResult& r) {
@@ -1440,10 +1448,19 @@ int cmd_project(Args& a) {
     } else if (sub == "add-broadcast") {
         if (rest.empty()) { std::cerr << "用法：sb project add-broadcast <项目> <名字>\n"; return 2; }
         return show(sbcliAddBroadcast(proj, rest[0]));
+    } else if (sub == "add-extension") {
+        if (rest.empty()) {
+            std::cerr << "用法：sb project add-extension <项目> <扩展.js | URL>\n"
+                         "  · 本地 .js 文件 → 复制到 extensions/<id>.js 并登记\n"
+                         "  · https URL      → 下载源码存为 extensions/<id>.js 并登记\n"
+                         "  · 已登记的扩展    → 重新解析校验\n";
+            return 2;
+        }
+        return show(sbcliAddExtension(proj, rest[0]));
     } else {
         std::cerr << "未知 project 子命令：" << sub << "\n"
                   << "可用：init / add-sprite / add-costume / add-sound /\n"
-                  << "      add-variable / add-list / add-broadcast\n";
+                  << "      add-variable / add-list / add-broadcast / add-extension\n";
         return 2;
     }
 }

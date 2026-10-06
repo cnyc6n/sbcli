@@ -318,8 +318,18 @@ const std::map<std::string, std::set<std::string>>& requiredParams() {
 // 额外：项目本地扩展（extensions/*.js，unpack 导出的源码）注册的积木也算已知。
 // 每个检查进程只加载一次，故用文件级全局集合（sbcliCheck 开头填充）。
 static std::set<std::string> g_extBlockTypes;
+static std::map<std::string, std::vector<std::string>> g_extBlockParams;
 static bool isKnownOpcodeExt(const std::string& op) {
     return sbcIsKnownOpcode(op) || g_extBlockTypes.count(op) > 0;
+}
+// 取某 opcode 允许的参数名：优先内置表；扩展积木回退到 getInfo 解析出的参数表。
+static std::vector<std::string> allowedParamsOf(const std::string& op) {
+    auto f = sbcOpcodeFields(op);          // 若返回 set，用下面的包装
+    std::vector<std::string> out(f.begin(), f.end());
+    if (!out.empty()) return out;
+    auto it = g_extBlockParams.find(op);
+    if (it != g_extBlockParams.end()) return it->second;
+    return out;
 }
 
 std::string joinWords(const std::set<std::string>& s, const std::string& sep) {
@@ -409,10 +419,12 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
     // ---- 加载项目本地扩展源码（extensions/*.js）----
     // 让扩展积木不被报 unknown-opcode。解析失败静默（退化为旧行为）。
     g_extBlockTypes.clear();
+    g_extBlockParams.clear();
     {
         ExtInfo ext;
         loadExtensionsFromDir(root, ext);
         for (const auto& kv : ext.blockTypes) g_extBlockTypes.insert(kv.first);
+        g_extBlockParams = ext.blockParams;
     }
 
     // ---- 收集 block.sbcli ----
@@ -593,19 +605,19 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                      "未收录的 opcode「" + vop + "」（用 `sb search <关键词>` 查准确名字）");
                 return;
             }
-            auto fields = sbcOpcodeFields(vop);
-            std::set<std::string> allowed(fields.begin(), fields.end());
+            auto fieldsVec = allowedParamsOf(vop);
+            std::set<std::string> allowed(fieldsVec.begin(), fieldsVec.end());
             std::set<std::string> seen;
             for (const auto& p : v.args) {
                 const std::string& key = p.canon.empty() ? p.key : p.canon;
                 // obscured shadow 双键约定（unpack 输出 `KEY=<主块> __shadow_KEY=<桩>`）：
                 // __shadow_ 前缀是保留标记，不是真实参数名，跳过白名单校验。
                 if (p.key.compare(0, 9, "__shadow_") == 0) continue;
-                if (allowed.count(key) == 0 && !fields.empty())
+                if (allowed.count(key) == 0 && !allowed.empty())
                     emit(line, 0, CheckLevel::Error, "syntax", "unknown-param",
                          "未知参数名「" + p.key + "」（" + vop + " 的参数：" +
                          joinWords(allowed, "、") + "）");
-                else if (!fields.empty()) {
+                else if (!allowed.empty()) {
                     if (!seen.insert(key).second)
                         emit(line, 0, CheckLevel::Warning, "syntax", "duplicate-param",
                              "参数「" + p.key + "」重复出现，后者覆盖前者");
@@ -671,8 +683,8 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
             }
 
             // ---- 语法：参数名 / 必填 ----
-            auto fields = sbcOpcodeFields(b.opcode);
-            std::set<std::string> allowed(fields.begin(), fields.end());
+            auto fieldsVec = allowedParamsOf(b.opcode);
+            std::set<std::string> allowed(fieldsVec.begin(), fieldsVec.end());
             std::set<std::string> givenCanon;
             std::set<std::string> seen;
 
@@ -688,7 +700,7 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                 if (p.key.compare(0, 9, "__shadow_") == 0)
                     continue;
 
-                if (!fields.empty() && allowed.count(key) == 0) {
+                if (!allowed.empty() && allowed.count(key) == 0) {
                     // 欲 literal "值给了不存在的参数" —— 会被丢弃，报 warning 而非 error，
                     // 并提示正确的写法（format.md §2 的 looks_say ... SECS 是文档笔误）
                     if (p.key == "SECS" && b.opcode == "looks_say")
@@ -699,7 +711,7 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                         emit(line, 0, CheckLevel::Error, "syntax", "unknown-param",
                              "未知参数名「" + p.key + "」（" + b.opcode + " 的参数：" +
                              joinWords(allowed, "、") + "）");
-                } else if (!fields.empty()) {
+                } else if (!allowed.empty()) {
                     if (!seen.insert(key).second)
                         emit(line, 0, CheckLevel::Warning, "syntax", "duplicate-param",
                              "参数「" + p.key + "」重复出现，后者覆盖前者");
@@ -723,7 +735,7 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
             }
 
             // 必填缺失（SB3_T 里的块）
-            if (!fields.empty()) {
+            if (!allowed.empty()) {
                 auto rit = requiredParams().find(b.opcode);
                 if (rit != requiredParams().end()) {
                     std::set<std::string> missing;

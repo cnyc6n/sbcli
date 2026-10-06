@@ -62,7 +62,22 @@ static int fillFromJson(const std::string& jsonOut, ExtInfo& out) {
             if (t == "reporter") type = 1;
             else if (t == "boolean") type = 2;
             else if (t == "hat") type = 3;
-            out.blockTypes[extId + "_" + op] = type;
+            std::string fullOp = extId + "_" + op;
+            out.blockTypes[fullOp] = type;
+            // 参数名（getInfo().arguments 的键）→ 用于 check 的参数校验
+            if (b.contains("args") && b["args"].is_object()) {
+                std::vector<std::string> names;
+                std::map<std::string, std::string> menus;
+                for (auto ai = b["args"].begin(); ai != b["args"].end(); ++ai) {
+                    names.push_back(ai.key());
+                    if (ai.value().is_object() && ai.value().contains("menu") &&
+                        !ai.value()["menu"].is_null() && ai.value()["menu"].is_string()) {
+                        menus[ai.key()] = ai.value()["menu"].get<std::string>();
+                    }
+                }
+                if (!names.empty()) out.blockParams[fullOp] = names;
+                if (!menus.empty()) out.blockMenus[fullOp] = menus;
+            }
         }
     }
     return count;
