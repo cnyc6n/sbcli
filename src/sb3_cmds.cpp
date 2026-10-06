@@ -2,6 +2,7 @@
 #include "sb3.hpp"
 #include "sb3_tables.hpp"
 #include "sb3_internal.hpp"
+#include "ext_loader.hpp"   // 自动联网解析扩展（extensionURLs）
 #include "commands.hpp"    // Args 完整定义
 #include <algorithm>
 #include <iostream>
@@ -94,6 +95,8 @@ int s3_cmd_sprites(const Args& a) {
 int s3_cmd_text(const Args& a) {
     Sb3File sf = sb3LoadAny(a.file);
     const Elem& targets = sf.targets;
+    ExtInfo ext;
+    loadExtensionsFromSb3(sf, ext);
     auto names = sb3NameLists(targets);
     json out;
     out["file"] = a.file;
@@ -200,6 +203,10 @@ int s3_cmd_text(const Args& a) {
 int s3_cmd_script(const Args& a) {
     Sb3File sf = sb3LoadAny(a.file);
     const Elem& targets = sf.targets;
+    // 自动解析扩展（extensionURLs → 内嵌 data: 或在线 https: 源码 → getInfo）
+    // 失败静默：静态表 / generic 兜底，不影响渲染
+    ExtInfo ext;
+    loadExtensionsFromSb3(sf, ext);
     // 不拷贝整个 targets 数组：只有 --sprite 过滤时才构造过滤列表
     std::vector<Elem> keep;
     bool filtered = false;
@@ -231,11 +238,19 @@ int s3_cmd_script(const Args& a) {
         }
     };
 
+    // 统一构造 Renderer 并注入已解析的扩展表（动态表优先于 generic 兜底）
+    auto makeRenderer = [&](const Elem& t) {
+        Renderer rc(t);
+        rc.dynExtTypes = ext.blockTypes;
+        rc.dynExtNames = ext.extNames;
+        return rc;
+    };
+
     if (a.json) {
         json payload = json::array();
         forEachTarget([&](const Elem& t) {
             if (!t.is_object()) return;
-            Renderer r(t);
+            Renderer r = makeRenderer(t);
             json scripts = json::array();
             for (auto& lines : r.scripts(0, (size_t)sb3ScriptBudget(a))) {
                 std::string joined;
@@ -261,7 +276,7 @@ int s3_cmd_script(const Args& a) {
     out << "文件：" << basename(a.file) << "  （" << sf.kind << "）\n";
     forEachTarget([&](const Elem& t) {
         if (!t.is_object()) return;
-        Renderer r(t);
+        Renderer r = makeRenderer(t);
         std::string flag = t.at("isStage").b() ? "（舞台）" : "";
         out << "\n═══ 角色：" << std::string(t.at("name").sv()) << flag << " ═══\n";
         // --limit N：最多渲染 N 个完整脚本（行内不限，不再砍半块）
@@ -693,6 +708,8 @@ int s3_cmd_find(const Args& a) {
     for (auto& p : files) {
         Sb3File sf;
         try { sf = sb3LoadAny(p); } catch (const Sb3Error&) { continue; }
+        ExtInfo ext;
+        loadExtensionsFromSb3(sf, ext);
         const Elem& targets = sf.targets;
         if (!targets.is_array()) continue;
         for (auto te : targets.arr()) {
@@ -746,6 +763,8 @@ int s3_cmd_find(const Args& a) {
             for (auto& s : res.strings) bag.emplace_back("积木文字", std::get<2>(s));
             if (a.script) {
                 Renderer r(t);
+                r.dynExtTypes = ext.blockTypes;
+                r.dynExtNames = ext.extNames;
                 int i = 1;
                 for (auto& lines : r.scripts(0)) {
                     for (auto& ln : lines) bag.emplace_back("脚本" + std::to_string(i), ln);

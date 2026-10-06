@@ -250,7 +250,8 @@ std::string Renderer::extBlockRender(const Elem& b, int type, const std::string&
     } else {
         extId = fullOp;
     }
-    // 扩展显示名：内置 EXT_NAMES 优先，否则自定义 CUSTOM_EXT_NAMES，否则原 id
+    // 扩展显示名：内置 EXT_NAMES 优先，否则自定义 CUSTOM_EXT_NAMES，
+    // 否则运行时 dynExtNames，否则原 id
     std::string extName = extId;
     {
         auto it = EXT_NAMES.find(extId);
@@ -258,6 +259,14 @@ std::string Renderer::extBlockRender(const Elem& b, int type, const std::string&
         else {
             auto jt = CUSTOM_EXT_NAMES.find(extId);
             if (jt != CUSTOM_EXT_NAMES.end()) extName = jt->second;
+            else {
+                auto kt = AUTO_EXT_NAMES.find(extId);
+                if (kt != AUTO_EXT_NAMES.end()) extName = kt->second;
+                else {
+                    auto lt = dynExtNames.find(extId);
+                    if (lt != dynExtNames.end()) extName = lt->second;
+                }
+            }
         }
     }
 
@@ -478,7 +487,7 @@ std::string Renderer::render(const std::string& bid) {
         if (t2 != SB2_T.end()) tplPtr = &t2->second;
     }
     if (tplPtr == nullptr) {
-        // 未收录模板 → 查扩展积木表（内置 + 自定义）
+        // 未收录模板 → 查扩展积木表（内置 + 自定义 + 运行时动态）
         // 扩展块显示为「扩展名·块名」，并按 blockType 用正确括号形态。
         // 注意：扩展块不进 missing（它们是已注册的积木，不是未知块）。
         auto extIt = EXT_BLOCK_TYPES.find(op);
@@ -486,6 +495,11 @@ std::string Renderer::render(const std::string& bid) {
         auto cextIt = CUSTOM_EXT_BLOCK_TYPES.find(op);
         if (cextIt != CUSTOM_EXT_BLOCK_TYPES.end())
             return extBlockRender(b, cextIt->second, op);
+        auto aextIt = AUTO_EXT_BLOCK_TYPES.find(op);
+        if (aextIt != AUTO_EXT_BLOCK_TYPES.end())
+            return extBlockRender(b, aextIt->second, op);
+        auto dextIt = dynExtTypes.find(op);
+        if (dextIt != dynExtTypes.end()) return extBlockRender(b, dextIt->second, op);
         missing[op]++;
         return generic(b);
     }

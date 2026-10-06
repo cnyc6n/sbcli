@@ -14,6 +14,7 @@ namespace sb {
 // 已解析的 simdjson DOM + 压缩包。data 引用 p 的解析缓冲区（必须一起存活）。
 struct Sb3File {
     std::string kind;  // "project" / "sb2" / "sprite"
+    std::string path;  // 源文件路径（ext 加载用）
     std::shared_ptr<mzip::Reader> zip;
     std::shared_ptr<simdjson::dom::parser> p;   // data 所在文档的解析器
     simdjson::dom::element data;                // 顶层元素（json 命令 dump 用）
@@ -57,6 +58,12 @@ private:
 
     // 扩展积木渲染（内置/自定义）：type 0=COMMAND 1=REPORTER 2=BOOLEAN 3=HAT
     std::string extBlockRender(const Elem& b, int type, const std::string& fullOp);
+
+public:
+    // 运行时发现的扩展积木表（opcode → 类型），来自自动联网解析（sb ext）
+    // 渲染时先查静态表（EXT_BLOCK_TYPES/CUSTOM_EXT_BLOCK_TYPES），再查此动态表
+    std::map<std::string, int> dynExtTypes;
+    std::map<std::string, std::string> dynExtNames;   // 扩展id → 名称
 
     std::string inputValue(const Elem& arr, bool menu=false);
     std::string prim(const Elem& x, bool menu=false);

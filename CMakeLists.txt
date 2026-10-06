@@ -19,6 +19,7 @@ add_executable(sb
     src/sb3_load.cpp
     src/sb3_render.cpp
     src/sb3_helpers.cpp
+    src/ext_loader.cpp
     src/sb3_cmds.cpp
     src/sb3_graph.cpp
     src/sb3_diff.cpp

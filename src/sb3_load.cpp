@@ -52,6 +52,7 @@ Sb3File sb3LoadAny(const std::string& path) {
     }
 
     Sb3File out;
+    out.path = path;
     out.zip = std::make_shared<mzip::Reader>(path);
     return sb3LoadFromReader(out.zip, path);
 }
