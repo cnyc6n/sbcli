@@ -11,6 +11,7 @@
 
 #include "sbcli_check.hpp"
 #include "sbcli_parser.hpp"
+#include "ext_loader.hpp"
 #include "common.hpp"
 #include "sb3_tables.hpp"
 
@@ -313,6 +314,13 @@ const std::map<std::string, std::set<std::string>>& requiredParams() {
 // opcode 收录判断统一走 core-parser 的 sbcIsKnownOpcode（单一权威，已覆盖
 // SB3_T / SB2_T / procedures_* 等保留 opcode）。别名也由解析器归一化成
 // SbcParam::canon，这里不再自行查表或重复报别名提示。
+//
+// 额外：项目本地扩展（extensions/*.js，unpack 导出的源码）注册的积木也算已知。
+// 每个检查进程只加载一次，故用文件级全局集合（sbcliCheck 开头填充）。
+static std::set<std::string> g_extBlockTypes;
+static bool isKnownOpcodeExt(const std::string& op) {
+    return sbcIsKnownOpcode(op) || g_extBlockTypes.count(op) > 0;
+}
 
 std::string joinWords(const std::set<std::string>& s, const std::string& sep) {
     std::string out;
@@ -397,6 +405,15 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
     }
     while (root.size() > 3 && root.back() == '/') root.pop_back();
     rep.root = root;
+
+    // ---- 加载项目本地扩展源码（extensions/*.js）----
+    // 让扩展积木不被报 unknown-opcode。解析失败静默（退化为旧行为）。
+    g_extBlockTypes.clear();
+    {
+        ExtInfo ext;
+        loadExtensionsFromDir(root, ext);
+        for (const auto& kv : ext.blockTypes) g_extBlockTypes.insert(kv.first);
+    }
 
     // ---- 收集 block.sbcli ----
     std::vector<std::string> absFiles;
@@ -570,7 +587,7 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
             // 恢复产物的 opcode 可能是 "(" 或空 —— 已由 E_PARAM_EXPECTED 报过
             if (vop.empty() || !std::isalnum((unsigned char)vop[0])) return;
             if (parserErrorLines.count(line)) return;  // 该行结构已错，不叠加派生诊断
-            bool known = sbcIsKnownOpcode(vop);
+            bool known = isKnownOpcodeExt(vop);
             if (!known) {
                 emit(line, 0, CheckLevel::Error, "syntax", "unknown-opcode",
                      "未收录的 opcode「" + vop + "」（用 `sb search <关键词>` 查准确名字）");
@@ -633,7 +650,7 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
             int line = b.line;
 
             // ---- 语法：opcode 收录 ----
-            if (!sbcIsKnownOpcode(b.opcode)) {
+            if (!isKnownOpcodeExt(b.opcode)) {
                 std::string msg = "未收录的 opcode「" + b.opcode + "」";
                 std::vector<std::string> near;
                 for (const auto& kv : SB3_T)

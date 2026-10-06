@@ -1442,6 +1442,83 @@ UnpackResult sbcliUnpack(const std::string& sb3Path, const std::string& outDir,
         }
     }
     for (const auto& b : allBcasts) root.broadcasts.insert(b);
+
+    // ---- 扩展（写入 [extensions] 段）----
+    // data: 内嵌源码 → 解码落盘到 extensions/<id>.js（meta 里只存相对路径）
+    // https: 在线 URL → 直接存 URL
+    // 只有 extensions 列表（无 URL）→ 存 id，值留空
+    {
+        Elem top(f.data);
+        Elem eurls = top.at("extensionURLs");
+        std::map<std::string, std::string> raw;   // id → 原始 URL
+        if (eurls.is_object()) {
+            for (auto ef : eurls.obj()) {
+                Elem v(ef.value);
+                raw[std::string(ef.key)] = v.is_string() ? std::string(v.sv()) : "";
+            }
+        }
+        Elem elist = top.at("extensions");
+        if (elist.is_array()) {
+            for (auto ee : elist.arr()) {
+                Elem e(ee);
+                if (!e.is_string()) continue;
+                std::string nm(e.sv());
+                if (!nm.empty() && !raw.count(nm)) raw[nm] = "";
+            }
+        }
+        std::map<std::string, std::string> exts;
+        for (auto& [id, url] : raw) {
+            if (url.rfind("data:", 0) == 0) {
+                // 内嵌源码：解码 → extensions/<id>.js
+                std::string code = cm::decodeDataUrl(url);
+                if (!code.empty()) {
+                    std::string extDir = cm::joinRel(cm::norm(outDir), "extensions");
+                    cm::makeDirs(extDir);
+                    // id 可能含点/斜杠，文件名做安全化
+                    std::string safe;
+                    for (char ch : id) {
+                        if (std::isalnum((unsigned char)ch) || ch == '-' || ch == '_')
+                            safe += ch;
+                        else safe += '_';
+                    }
+                    if (safe.empty()) safe = "extension";
+                    std::string rel = "extensions/" + safe + ".js";
+                    // 逐行写出源码。注意：writeLines 会在每行末尾补 "\n"，
+                    // 若源码本身不以换行结尾，需在最后一行之外补一个末尾标记行
+                    // 会导致 round-trip 多出换行 —— 这里统一保证：源码末尾总是
+                    // 补一个 "\n"（与原作品 data URL 的通常形态一致），并在
+                    // pack 侧读取时去掉文件末尾多余空行 ⇒ 见 pack 的实现说明。
+                    std::vector<std::string> codeLines;
+                    {
+                        std::string cur;
+                        for (char ch : code) {
+                            if (ch == '\n') { codeLines.push_back(cur); cur.clear(); }
+                            else if (ch != '\r') cur += ch;
+                        }
+                        if (!cur.empty()) codeLines.push_back(cur);
+                    }
+                    cm::writeLines(cm::joinRel(cm::norm(outDir), rel), codeLines);
+                    exts[id] = rel;
+                    log << "  扩展源码已导出：" << rel << "\n";
+                    continue;
+                }
+                exts[id] = url;   // 解码失败：原样保留
+            } else {
+                exts[id] = url;
+            }
+        }
+
+        // 平台信息（meta.platform.name）→ platform 字段
+        Elem metaEl = top.at("meta");
+        if (metaEl.is_object()) {
+            Elem plat = metaEl.at("platform");
+            if (plat.is_object()) {
+                Elem pn = plat.at("name");
+                if (pn.is_string()) root.platform = std::string(pn.sv());
+            }
+        }
+        if (!exts.empty()) root.extensions = exts;
+    }
     cm::writeRootMeta(cm::joinRel(cm::norm(outDir), "meta.sbcli"), root);
 
     r.ok = true;

@@ -48,6 +48,89 @@ inline bool makeDirs(const std::string& p) {
     std::error_code ec;
     return fs::create_directories(fs::u8path(p), ec) || fs::is_directory(fs::u8path(p), ec);
 }
+
+// 编码为 data URL 的 body。
+// 与 JS 的 encodeURIComponent 一致（保留 A-Za-z0-9 - _ . ! ~ * ' ( ) 及其他
+// 子分隔符），这样与 TurboWarp 保存的 data URL 逐字节一致，round-trip 无损。
+inline std::string encodeDataUrlBody(const std::string& code) {
+    static const char* HEX = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(code.size() * 3);
+    for (unsigned char c : code) {
+        bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') ||
+                    c == '-' || c == '_' || c == '.' || c == '!' || c == '~' ||
+                    c == '*' || c == '\'' || c == '(' || c == ')';
+        if (safe) {
+            out += (char)c;
+        } else {
+            out += '%';
+            out += HEX[(c >> 4) & 0xF];
+            out += HEX[c & 0xF];
+        }
+    }
+    return out;
+}
+
+// 解码 data URL（sb3 内嵌扩展源码）：
+//   data:application/javascript,<urlencoded>
+//   data:text/javascript;base64,<base64>
+// 失败返回空串。
+inline std::string decodeDataUrl(const std::string& url) {
+    if (url.rfind("data:", 0) != 0) return {};
+    size_t comma = url.find(',');
+    if (comma == std::string::npos) return {};
+    std::string meta = url.substr(5, comma - 5);
+    std::string body = url.substr(comma + 1);
+    bool isBase64 = meta.find(";base64") != std::string::npos;
+    if (isBase64) {
+        std::string out;
+        int val = 0, bits = 0;
+        auto dec = [](char c) -> int {
+            if (c >= 'A' && c <= 'Z') return c - 'A';
+            if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+            if (c >= '0' && c <= '9') return c - '0' + 52;
+            if (c == '+') return 62;
+            if (c == '/') return 63;
+            return -1;
+        };
+        for (char c : body) {
+            if (c == '=' || c == '\n' || c == '\r') continue;
+            int d = dec(c);
+            if (d < 0) continue;
+            val = (val << 6) | d;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                out += (char)((val >> bits) & 0xFF);
+            }
+        }
+        return out;
+    }
+    // percent-decoding（%XX）+ 常见转义
+    std::string out;
+    out.reserve(body.size());
+    for (size_t i = 0; i < body.size(); ++i) {
+        char c = body[i];
+        if (c == '%' && i + 2 < body.size()) {
+            auto hex = [](char h) -> int {
+                if (h >= '0' && h <= '9') return h - '0';
+                if (h >= 'a' && h <= 'f') return h - 'a' + 10;
+                if (h >= 'A' && h <= 'F') return h - 'A' + 10;
+                return -1;
+            };
+            int h1 = hex(body[i + 1]), h2 = hex(body[i + 2]);
+            if (h1 >= 0 && h2 >= 0) {
+                out += (char)((h1 << 4) | h2);
+                i += 2;
+                continue;
+            }
+        }
+        if (c == '+') { out += ' '; continue; }
+        out += c;
+    }
+    return out;
+}
 inline std::string relToRoot(const std::string& root, const std::string& abs) {
     std::error_code ec;
     fs::path rp = fs::relative(fs::u8path(abs), fs::u8path(root), ec);
@@ -346,8 +429,15 @@ inline void writeCharMeta(const std::string& path, const CharMeta& m,
 struct RootMeta {
     bool exists = false;
     std::string name;
+    // ---- 项目元数据（可选，pack 时写入 sb3 的 meta 段）----
+    std::string author;        // 作者
+    std::string description;   // 描述
+    std::string platform;      // 目标平台：Scratch / TurboWarp / Gandi（空=Scratch）
+    std::string agent;         // 导出工具标识（空=本工具）
+    std::string notes;         // 自由备注（不写入 sb3，仅本地文档）
     std::map<std::string, std::string> variables, lists;   // 名 → 初始值文本
     std::set<std::string> broadcasts;
+    std::map<std::string, std::string> extensions;  // 扩展id → URL（data: 或 https:）
     std::vector<std::string> extra;   // 其它段/未知行，原样保留
 };
 
@@ -369,16 +459,21 @@ inline RootMeta loadRootMeta(const std::string& path) {
 
         if (s.front() == '[' && s.back() == ']') {
             std::string sec = trimStr(s.substr(1, s.size() - 2));
-            section = (sec == "variables" || sec == "lists" || sec == "broadcasts") ? sec : "";
+            section = (sec == "variables" || sec == "lists" || sec == "broadcasts" ||
+                       sec == "extensions") ? sec : "";
             if (section.empty()) m.extra.push_back(raw);
             continue;
         }
         size_t colon = s.find(':');
         if (section.empty() && colon != std::string::npos) {
-            if (trimStr(s.substr(0, colon)) == "name") {
-                m.name = unquote(trimStr(s.substr(colon + 1)));
-                continue;
-            }
+            std::string key = trimStr(s.substr(0, colon));
+            std::string val = unquote(trimStr(s.substr(colon + 1)));
+            if (key == "name")              { m.name = val; continue; }
+            if (key == "author")            { m.author = val; continue; }
+            if (key == "description")       { m.description = val; continue; }
+            if (key == "platform")          { m.platform = val; continue; }
+            if (key == "agent")             { m.agent = val; continue; }
+            if (key == "notes")             { m.notes = val; continue; }
             m.extra.push_back(raw);
             continue;
         }
@@ -387,6 +482,12 @@ inline RootMeta loadRootMeta(const std::string& path) {
         if (section == "broadcasts") {
             std::string nm = unquote(s);
             if (!nm.empty()) m.broadcasts.insert(nm);
+        } else if (section == "extensions") {
+            // 扩展 id = URL（URL 可能含 `=`，只切第一个）
+            size_t eq = s.find('=');
+            std::string nm  = unquote(eq == std::string::npos ? s : s.substr(0, eq));
+            std::string val = trimStr(eq == std::string::npos ? "" : s.substr(eq + 1));
+            if (!nm.empty()) m.extensions[nm] = unquote(val);
         } else {
             size_t eq = s.find('=');
             std::string nm  = unquote(eq == std::string::npos ? s : s.substr(0, eq));
@@ -400,6 +501,25 @@ inline RootMeta loadRootMeta(const std::string& path) {
 inline void writeRootMeta(const std::string& path, const RootMeta& m) {
     std::vector<std::string> out;
     if (!m.name.empty()) { out.push_back("name: " + quoteIfNeeded(m.name)); out.push_back(""); }
+    // 项目元数据（可选字段，写了才输出）
+    {
+        std::vector<std::string> md;
+        if (!m.author.empty())      md.push_back("author: " + quoteIfNeeded(m.author));
+        if (!m.description.empty()) md.push_back("description: " + quoteIfNeeded(m.description));
+        if (!m.platform.empty())    md.push_back("platform: " + quoteIfNeeded(m.platform));
+        if (!m.agent.empty())       md.push_back("agent: " + quoteIfNeeded(m.agent));
+        if (!m.notes.empty())       md.push_back("notes: " + quoteIfNeeded(m.notes));
+        if (!md.empty()) {
+            for (auto& l : md) out.push_back(l);
+            out.push_back("");
+        }
+    }
+    if (!m.extensions.empty()) {
+        out.push_back("[extensions]");
+        for (const auto& kv : m.extensions)
+            out.push_back(quoteIfNeeded(kv.first) + " = " + kv.second);
+        out.push_back("");
+    }
     if (!m.variables.empty()) {
         out.push_back("[variables]");
         // 变量名可能含 `#`（扩展隐藏变量）/ 空格 / `=`，需加引号，否则被当注释/截断

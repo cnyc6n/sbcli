@@ -6,8 +6,14 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const LIB = require(path.join(__dirname, 'ext_parse_lib.js'));
+// 用 lib 的实现（单一权威），本地旧副本禁用
+const makeScratch = LIB.makeScratch, makeSandbox = LIB.makeSandbox,
+      fetchText = LIB.fetchText, parseExtension = LIB.parseExtension;
 
 // ---------- Scratch API 模拟 ----------
+/* 本地旧实现已由 ext_parse_lib.js 取代
+
 function makeScratch() {
   const scratch = {
     BlockType: { COMMAND: 'command', REPORTER: 'reporter', BOOLEAN: 'boolean',
@@ -25,6 +31,10 @@ function makeScratch() {
   scratch.translate = tf;
   return scratch;
 }
+*/
+
+
+/* 本地旧实现已由 ext_parse_lib.js 取代
 
 function makeSandbox(scratch) {
   // 非沙盒扩展常在模块顶层访问 window/document/Scratch.vm.runtime，
@@ -133,8 +143,12 @@ function makeSandbox(scratch) {
   vm.createContext(sandbox);
   return sandbox;
 }
+*/
+
 
 // ---------- 下载（支持 data: 内嵌 + http(s)）----------
+/* 本地旧实现已由 ext_parse_lib.js 取代
+
 function fetchText(url) {
   // data:application/javascript,<urlencoded code> —— sb3 内嵌自定义插件
   if (url.startsWith('data:')) {
@@ -162,8 +176,12 @@ function fetchText(url) {
     req.setTimeout(15000, () => req.destroy(new Error('timeout')));
   });
 }
+*/
+
 
 // ---------- 解析 ----------
+/* 本地旧实现已由 ext_parse_lib.js 取代
+
 function parseExtension(code) {
   const scratch = makeScratch();
   const sandbox = makeSandbox(scratch);
@@ -192,6 +210,8 @@ function parseExtension(code) {
   }
   return { id: info.id, name: info.name, blocks, _warn: execError ? String(execError.message).slice(0, 80) : null };
 }
+*/
+
 
 // ---------- 主流程 ----------
 // 从已抓取的清单（F:\temp\tw_ext_list.json）找 id 对应的 URL：
@@ -253,6 +273,28 @@ async function main() {
     const results = await processSb3(input);
     console.log('___RESULT___' + JSON.stringify(results));
     process.exit(0);
+  }
+
+  // 本地扩展源码文件模式（extensions/*.js）：直接读文件解析
+  if (input.endsWith('.js') || fs.existsSync(input)) {
+    let code;
+    try {
+      code = fs.readFileSync(input, 'utf-8');
+    } catch (e) {
+      console.error(`读取失败: ${e.message}`);
+      console.log('___RESULT___{"error":true,"message":"read failed"}');
+      process.exit(1);
+    }
+    try {
+      const info = parseExtension(code);
+      console.error(`解析成功: id=${info.id} blocks=${info.blocks.length}`);
+      console.log('___RESULT___' + JSON.stringify(info));
+      process.exit(0);
+    } catch (e) {
+      console.error(`解析失败: ${e.message}`);
+      console.log('___RESULT___{"error":true,"message":"' + String(e.message).slice(0, 100) + '"}');
+      process.exit(1);
+    }
   }
 
   let url = input;

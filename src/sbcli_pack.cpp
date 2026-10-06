@@ -29,6 +29,7 @@
 #include <cstring>
 #include <functional>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <set>
 #include <sstream>
@@ -1179,16 +1180,58 @@ int cmd_pack(Args& a) {
     Json project = Json::object();
     project["targets"]   = targets;
     project["monitors"]  = Json::array();
-    project["extensions"]= Json::array();
+    // 扩展：meta.sbcli [extensions] 段（id → 本地相对路径 或 URL）
+    // 本地路径（extensions/xxx.js）→ 读文件内容，编码回 data: URL（与 unpack 对称）
+    {
+        Json exts = Json::array();
+        Json eurls = Json::object();
+        for (const auto& kv : rootMeta.extensions) {
+            exts.push_back(kv.first);
+            std::string url = kv.second;
+            // 本地相对路径（非 URL）→ 读源码并编码为 data: URL
+            if (!url.empty() && url.find("://") == std::string::npos &&
+                url.rfind("data:", 0) != 0) {
+                fs::path p = u8base / fs::u8path(url);
+                std::ifstream in(p);
+                if (in.good()) {
+                    std::stringstream ss;
+                    ss << in.rdbuf();
+                    std::string code = ss.str();
+                    // unpack 用 writeLines 落盘（每行补 "\n"），会多出末尾一个换行；
+                    // 去掉它以使 data URL 与 unpack 前逐字节一致。
+                    if (!code.empty() && code.back() == '\n') code.pop_back();
+                    url = std::string("data:application/javascript,") +
+                          cm::encodeDataUrlBody(code);
+                } else {
+                    std::cerr << "警告：扩展源码文件读不到：" << p.u8string() << "\n";
+                    url.clear();
+                }
+            }
+            if (!url.empty()) eurls[kv.first] = url;
+        }
+        project["extensions"] = exts;
+        if (!eurls.empty()) project["extensionURLs"] = eurls;
+    }
     Json meta = Json::object();
     meta["semver"]           = "3.0.0";
     meta["vm"]               = "https://github.com/scratchfoundation/scratch-vm";
-    meta["agent"]            = "https://github.com/scratchfoundation/scratch-www";
+    meta["agent"]            = rootMeta.agent.empty()
+                               ? "https://github.com/scratchfoundation/scratch-www"
+                               : rootMeta.agent;
     meta["loader"]           = "https://github.com/scratchfoundation/scratch-loader";
     meta["renderer"]         = "https://github.com/scratchfoundation/scratch-render";
     meta["stage"]            = "https://github.com/scratchfoundation/scratch-stage";
     meta["isNativelyCreated"]= false;
     meta["hasCloudData"]     = false;
+    // 目标平台（meta.sbcli 的 platform 字段）：Scratch / TurboWarp / Gandi
+    if (!rootMeta.platform.empty()) {
+        Json plat = Json::object();
+        plat["name"] = rootMeta.platform;
+        if (rootMeta.platform == "TurboWarp") plat["url"] = "https://turbowarp.org/";
+        else if (rootMeta.platform == "Gandi") plat["url"] = "https://getgandi.com/";
+        else if (rootMeta.platform == "Scratch") plat["url"] = "https://scratch.mit.edu/";
+        meta["platform"] = plat;
+    }
     project["meta"] = meta;
 
     std::string projectJson = project.dump(2);

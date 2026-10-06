@@ -174,7 +174,24 @@ ProjResult sbcliProjectInit(const std::string& dir, const std::string& name) {
         RootMeta rm;
         rm.exists = false;
         rm.name = projName;
+        rm.platform = "TurboWarp";   // 默认目标平台（可改 Scratch / Gandi / 留空）
         writeRootMeta(rootMeta, rm);
+        // 补充说明性注释（writeRootMeta 不写注释，这里追加模板说明）
+        {
+            std::vector<std::string> lines = readLines(rootMeta);
+            std::vector<std::string> out;
+            out.push_back("# " + projName + " —— sbcli 项目定义");
+            out.push_back("# 元数据字段均可选，删掉即不写入 sb3：");
+            out.push_back("#   name         项目名（写入 sb3 meta.name 由平台决定）");
+            out.push_back("#   author       作者");
+            out.push_back("#   description  项目描述");
+            out.push_back("#   platform     目标平台：Scratch / TurboWarp / Gandi");
+            out.push_back("#   agent        导出工具标识（默认留空＝不写）");
+            out.push_back("#   notes        本地备注（不写入 sb3）");
+            out.push_back("");
+            for (auto& l : lines) out.push_back(l);
+            writeLines(rootMeta, out);
+        }
         r.created.push_back("meta.sbcli");
     } else {
         r.notes.push_back("根 meta 已存在，保留原内容");
