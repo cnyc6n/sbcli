@@ -319,8 +319,74 @@ const std::map<std::string, std::set<std::string>>& requiredParams() {
 // 每个检查进程只加载一次，故用文件级全局集合（sbcliCheck 开头填充）。
 static std::set<std::string> g_extBlockTypes;
 static std::map<std::string, std::vector<std::string>> g_extBlockParams;
+// 扩展菜单校验所需的两张表（见 ext_loader.hpp 的说明）：
+//   g_extMenuOfParam : opcode → 参数名 → 菜单 id（裸，扩展内唯一）
+//   g_extMenuValues  : "扩展id::菜单id" → 允许的取值集合
+//   g_extBlockOwner  : opcode → 扩展 id（把裸菜单 id 解析成完整键）
+static std::map<std::string, std::map<std::string, std::string>> g_extMenuOfParam;
+static std::map<std::string, std::set<std::string>>             g_extMenuValues;
+static std::map<std::string, std::string>                       g_extBlockOwner;
+// meta [extensions] 登记的所有扩展 id（权威清单）与「登记了但定义没加载到」的 id
+// （本地源码缺失 / URL 下载失败）。后者的积木不报 unknown-opcode 错误，降级为警告。
+static std::set<std::string> g_extRegisteredIds;
+static std::set<std::string> g_extFailedIds;
 static bool isKnownOpcodeExt(const std::string& op) {
     return sbcIsKnownOpcode(op) || g_extBlockTypes.count(op) > 0;
+}
+
+// 未知 opcode 是否属于「meta 已登记」的扩展：opcode 前缀 = id + "_"。
+// 命中返回扩展 id，未命中返回空串。
+static std::string registeredExtOf(const std::string& op) {
+    for (const auto& id : g_extRegisteredIds)
+        if (!id.empty() && op.compare(0, id.size() + 1, id + "_") == 0)
+            return id;
+    return {};
+}
+
+// 前置声明：joinWords 定义在文件下方，checkExtMenuValue 需要它
+std::string joinWords(const std::set<std::string>& s, const std::string& sep);
+
+// 校验扩展积木的菜单参数值。
+// 拿不到菜单定义（动态菜单 / 扩展没导出 menus / 值不是标量）时**静默返回**，
+// 宁可不校验也不误报 —— 扩展世界里的合法写法太多，保守为上。
+//
+// 另：扩展积木**不报**"必填参数缺失"，判断依据如下 ——
+//   Scratch 扩展的 getInfo().blocks[].arguments 每项都带 defaultValue，
+//   运行时缺了就取默认值，是合法且常见写法（拖出积木不填直接用）。
+//   原生块不同：必填表来自 SB3_T 模板语义，缺了会渲染/执行异常。
+//   所以原生块查表报缺失，扩展块一律不报。
+static void checkExtMenuValue(const std::string& op, const SbcParam& p, int line,
+                              const std::function<void(int, int, CheckLevel,
+                                                       const std::string&,
+                                                       const std::string&,
+                                                       const std::string&)>& emit) {
+    if (!p.value || p.value->kind != SbcValue::Kind::Scalar) return;  // reporter 值不校验
+    auto mo = g_extMenuOfParam.find(op);
+    if (mo == g_extMenuOfParam.end()) return;
+    auto mp = mo->second.find(p.canon.empty() ? p.key : p.canon);
+    if (mp == mo->second.end()) return;                    // 该参数不是菜单
+
+    auto ow = g_extBlockOwner.find(op);
+    if (ow == g_extBlockOwner.end()) return;
+    std::string fullKey = ow->second + "::" + mp->second;
+    auto mv = g_extMenuValues.find(fullKey);
+    if (mv == g_extMenuValues.end() || mv->second.empty()) return;  // 动态菜单/未知 → 静默
+
+    const std::string& v = p.value->text();
+    if (mv->second.count(v)) return;                       // 合法值
+
+    std::set<std::string> allowed = mv->second;
+    std::string hint = joinWords(allowed, "、");
+    if (allowed.size() > 8) {
+        // 菜单项太多时只列前几个，避免报错信息刷屏
+        std::vector<std::string> few(allowed.begin(), allowed.end());
+        few.resize(8);
+        std::set<std::string> fs(few.begin(), few.end());
+        hint = joinWords(fs, "、") + " 等 " + std::to_string(allowed.size()) + " 项";
+    }
+    emit(line, 0, CheckLevel::Error, "syntax", "bad-menu-value",
+         "参数 " + p.key + " 的值「" + v + "」不在菜单 " + mp->second +
+         " 的取值内（可选：" + hint + "）");
 }
 // 取某 opcode 允许的参数名：优先内置表；扩展积木回退到 getInfo 解析出的参数表。
 static std::vector<std::string> allowedParamsOf(const std::string& op) {
@@ -416,15 +482,26 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
     while (root.size() > 3 && root.back() == '/') root.pop_back();
     rep.root = root;
 
-    // ---- 加载项目本地扩展源码（extensions/*.js）----
-    // 让扩展积木不被报 unknown-opcode。解析失败静默（退化为旧行为）。
+    // ---- 加载项目本地扩展源码（extensions/*.js + meta [extensions] 登记的 URL）----
+    // 让扩展积木不被报 unknown-opcode。解析失败/URL 下载失败静默记入 failedIds，
+    // 相关积木降级为警告（见 registeredExtOf / ext-unloaded）。
     g_extBlockTypes.clear();
     g_extBlockParams.clear();
+    g_extMenuOfParam.clear();
+    g_extMenuValues.clear();
+    g_extBlockOwner.clear();
+    g_extRegisteredIds.clear();
+    g_extFailedIds.clear();
     {
         ExtInfo ext;
         loadExtensionsFromDir(root, ext);
         for (const auto& kv : ext.blockTypes) g_extBlockTypes.insert(kv.first);
         g_extBlockParams = ext.blockParams;
+        g_extMenuOfParam = ext.blockMenus;
+        g_extMenuValues  = ext.menuValues;
+        g_extBlockOwner  = ext.blockOwner;
+        g_extRegisteredIds = ext.registeredIds;
+        g_extFailedIds     = ext.failedIds;
     }
 
     // ---- 收集 block.sbcli ----
@@ -601,6 +678,16 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
             if (parserErrorLines.count(line)) return;  // 该行结构已错，不叠加派生诊断
             bool known = isKnownOpcodeExt(vop);
             if (!known) {
+                // 已登记扩展的积木但定义没加载到（源码缺失/URL 断网）→ 降级为警告，
+                // 不误报 unknown-opcode 错误（这可能是合法扩展积木，只是我们没拿到定义）。
+                std::string extId = registeredExtOf(vop);
+                if (!extId.empty() && g_extFailedIds.count(extId)) {
+                    emit(line, 0, CheckLevel::Warning, "reference", "ext-unloaded",
+                         "积木「" + vop + "」属于已登记扩展「" + extId +
+                         "」，但扩展定义未加载（源码缺失或网络不可用），无法校验参数"
+                         "（可 `sb project add-extension " + extId + " <js|URL>` 拉取源码）");
+                    return;
+                }
                 emit(line, 0, CheckLevel::Error, "syntax", "unknown-opcode",
                      "未收录的 opcode「" + vop + "」（用 `sb search <关键词>` 查准确名字）");
                 return;
@@ -637,6 +724,8 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                     checkAsset("造型", pv.text(), line);
                 else if (key == "SOUND_MENU" && pv.kind == SbcValue::Kind::Scalar)
                     checkAsset("声音", pv.text(), line);
+                // 扩展积木的菜单值（拿不到菜单定义时静默）
+                checkExtMenuValue(vop, p, line, emit);
                 if (pv.kind == SbcValue::Kind::Reporter)
                     walkValue(pv, line, depth + 1);
             }
@@ -663,6 +752,15 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
 
             // ---- 语法：opcode 收录 ----
             if (!isKnownOpcodeExt(b.opcode)) {
+                // 已登记扩展的积木但定义没加载到 → 降级为警告，不误报错误
+                std::string extId = registeredExtOf(b.opcode);
+                if (!extId.empty() && g_extFailedIds.count(extId)) {
+                    emit(line, 0, CheckLevel::Warning, "reference", "ext-unloaded",
+                         "积木「" + b.opcode + "」属于已登记扩展「" + extId +
+                         "」，但扩展定义未加载（源码缺失或网络不可用），无法校验参数"
+                         "（可 `sb project add-extension " + extId + " <js|URL>` 拉取源码）");
+                    return;
+                }
                 std::string msg = "未收录的 opcode「" + b.opcode + "」";
                 std::vector<std::string> near;
                 for (const auto& kv : SB3_T)
@@ -729,6 +827,8 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
                         checkAsset("造型", pv.text(), line);
                     else if (key == "SOUND_MENU" && pv.kind == SbcValue::Kind::Scalar)
                         checkAsset("声音", pv.text(), line);
+                    // 扩展积木的菜单值（拿不到菜单定义时静默）
+                    checkExtMenuValue(b.opcode, p, line, emit);
                     if (pv.kind == SbcValue::Kind::Reporter)
                         walkValue(pv, line, 1);
                 }

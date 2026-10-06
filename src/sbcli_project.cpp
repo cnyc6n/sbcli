@@ -10,6 +10,7 @@
 #include "sbcli_project.hpp"
 #include "sbcli_meta.hpp"
 #include "sbcli_parser.hpp"
+#include "ext_loader.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -467,6 +468,163 @@ ProjResult sbcliAddExtension(const std::string& project, const std::string& src)
 
     r.notes.push_back("扩展：" + (extName.empty() ? extId : extName) + "（id=" + extId + "）");
     if (blockCount > 0) r.notes.push_back("已解析块定义，可用于语法检查");
+    return r;
+}
+
+// ================================================================ 扩展管理
+// (task-7) list-extensions / remove-extension / ext-info
+//
+// 数据来源两处，互为补充：
+//   · meta.sbcli 的 [extensions] 段 = **权威登记**（id → 本地路径 或 URL）
+//   · extensions/*.js              = **源码**，用 node 工具解析出 name/块定义
+// 只登记没源码、或有源码没登记，都算异常状态，list 会标注出来而不是静默跳过。
+
+namespace {
+
+// 扩展 id → 该扩展自己的 opcode 列表（ExtInfo 的键是 <id>_<opcode>）
+std::vector<std::string> opcodesOfExt(const ExtInfo& ei, const std::string& id) {
+    std::vector<std::string> out;
+    std::string prefix = id + "_";
+    for (const auto& kv : ei.blockTypes)
+        if (kv.first.compare(0, prefix.size(), prefix) == 0)
+            out.push_back(kv.first.substr(prefix.size()));
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+} // namespace
+
+ProjResult sbcliListExtensions(const std::string& project,
+                               std::vector<ExtEntry>& out) {
+    std::string root;
+    ProjResult err;
+    if (!requireRoot(project, root, err)) return err;
+
+    ProjResult r;
+    r.ok = true;
+
+    RootMeta rm = loadRootMeta(joinRel(root, "meta.sbcli"));
+    if (!rm.exists) return fail("项目没有 meta.sbcli：" + root);
+
+    // 解析 extensions/ 下的源码，拿名称与块数
+    ExtInfo ei;
+    loadExtensionsFromDir(root, ei);
+
+    // 以 meta 登记为准遍历（登记是权威）；源码里多出来的文件另行提示
+    std::set<std::string> seenFile;
+    for (const auto& kv : rm.extensions) {
+        ExtEntry e;
+        e.id = kv.first;
+        e.source = kv.second;
+        e.isUrl = e.source.find("://") != std::string::npos ||
+                  e.source.rfind("data:", 0) == 0;
+        // 登记的可能是路径；本地文件按 id 找 extensions/<id>.js
+        std::string f = joinRel(root, joinRel("extensions", e.id + ".js"));
+        e.hasFile = fileExists(f);
+        seenFile.insert(e.id + ".js");
+
+        auto nit = ei.extNames.find(e.id);
+        e.parsed = (nit != ei.extNames.end());
+        e.name = e.parsed ? nit->second : e.id;
+        e.blocks = (int)opcodesOfExt(ei, e.id).size();
+        out.push_back(std::move(e));
+    }
+
+    // extensions/ 里有文件但 meta 没登记 → 提示（不自动登记）
+    std::error_code ec;
+    fs::path extDir = fs::u8path(joinRel(root, "extensions"));
+    if (fs::is_directory(extDir, ec)) {
+        for (const auto& de : fs::directory_iterator(extDir, ec)) {
+            if (!de.is_regular_file()) continue;
+            if (de.path().extension() != ".js") continue;
+            std::string fn = norm(de.path().filename().u8string());
+            if (seenFile.count(fn)) continue;
+            std::string id = fn.substr(0, fn.size() - 3);
+            // 只提示、不列入清单：list-extensions 列的是"已登记"扩展，
+            // 把未登记文件也算进去会让数量对不上用户的预期。
+            r.notes.push_back("extensions/" + fn +
+                              " 存在但未在 meta 的 [extensions] 登记"
+                              "（用 `sb project add-extension` 登记）");
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const ExtEntry& a, const ExtEntry& b) { return a.id < b.id; });
+    return r;
+}
+
+ProjResult sbcliRemoveExtension(const std::string& project, const std::string& id,
+                                bool keepFile) {
+    std::string root;
+    ProjResult err;
+    if (!requireRoot(project, root, err)) return err;
+
+    ProjResult r;
+    r.ok = true;
+
+    std::string metaPath = joinRel(root, "meta.sbcli");
+    RootMeta rm = loadRootMeta(metaPath);
+    if (!rm.exists) return fail("项目没有 meta.sbcli：" + root);
+    if (id.empty()) return fail("缺少扩展 id");
+    if (!rm.extensions.count(id))
+        return fail("扩展「" + id + "」没有登记在这个项目里"
+                    "（用 `sb project list-extensions` 看已登记的）");
+
+    rm.extensions.erase(id);
+    writeRootMeta(metaPath, rm);
+    r.created.push_back("meta.sbcli（移除 [extensions] 登记 " + id + "）");
+
+    std::string f = joinRel(root, joinRel("extensions", id + ".js"));
+    if (keepFile) {
+        if (fileExists(f))
+            r.notes.push_back("已保留源码 extensions/" + id + ".js（--keep-file）");
+    } else if (fileExists(f)) {
+        std::error_code ec;
+        if (!fs::remove(fs::u8path(f), ec))
+            return fail("无法删除 " + f + "：" + ec.message());
+        r.created.push_back("已删除 extensions/" + id + ".js");
+    } else {
+        r.notes.push_back("源码 extensions/" + id + ".js 不存在，只移除了登记");
+    }
+    return r;
+}
+
+ProjResult sbcliExtInfo(const std::string& project, const std::string& id,
+                        std::vector<ExtBlockInfo>& out) {
+    std::string root;
+    ProjResult err;
+    if (!requireRoot(project, root, err)) return err;
+
+    ProjResult r;
+    r.ok = true;
+    if (id.empty()) return fail("缺少扩展 id");
+
+    std::string f = joinRel(root, joinRel("extensions", id + ".js"));
+    if (!fileExists(f))
+        return fail("找不到扩展源码 extensions/" + id + ".js"
+                    "（用 `sb project list-extensions` 看已登记的扩展）");
+
+    ExtInfo ei;
+    if (loadExtensionsFromDir(root, ei) <= 0)
+        return fail("扩展源码解析失败：extensions/" + id + ".js"
+                    "（getInfo() 可能依赖浏览器 API 或语法错误）");
+    if (!ei.extNames.count(id))
+        return fail("扩展源码解析失败：extensions/" + id + ".js 里拿不到 id=" + id);
+
+    for (const std::string& op : opcodesOfExt(ei, id)) {
+        ExtBlockInfo b;
+        b.opcode = op;
+        b.fullOpcode = id + "_" + op;
+        auto tit = ei.blockTypes.find(b.fullOpcode);
+        b.type = (tit != ei.blockTypes.end()) ? tit->second : 0;
+
+        auto pit = ei.blockParams.find(b.fullOpcode);
+        if (pit != ei.blockParams.end())
+            for (const auto& nm : pit->second) b.args.emplace_back(nm, std::string());
+        auto mit = ei.blockMenus.find(b.fullOpcode);
+        if (mit != ei.blockMenus.end()) b.menus = mit->second;
+        out.push_back(std::move(b));
+    }
+    r.notes.push_back("扩展：" + ei.extNames.at(id) + "（id=" + id + "）");
     return r;
 }
 

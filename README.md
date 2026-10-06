@@ -38,7 +38,7 @@ JSON 解析基于 [simdjson](https://github.com/simdjson/simdjson)（只读 DOM�
 
 | 命令     | 作用 |
 |----------|------|
-| `project`| 项目脚手架：`init` / `add-sprite` / `add-costume` / `add-sound` / `add-variable` / `add-list` / `add-broadcast` |
+| `project`| 项目脚手架：`init` / `add-sprite` / `add-costume` / `add-sound` / `add-variable` / `add-list` / `add-broadcast` / `add-extension` |
 | `unpack` | 把 .sb3/.sb2 作品拆成 sbcli 项目目录（含素材导出） |
 | `check`  | 检查项目的脚本语法 / 结构 / 引用（四类；`--json` 结构化输出，有错退出码 1） |
 | `fix`    | 发现即声明：把脚本引用到的变量/列表/广播/造型/声音自动登记进 meta（**不改动 block.sbcli**，幂等） |
@@ -123,6 +123,27 @@ sb search 广播                      # 查语法模板 + 示例
 sb search looks_say --json
 ```
 
+### 扩展工作流
+
+扩展（TurboWarp/Gandi 生态的第三方积木）以源码形式参与项目，见 `docs/format.md` §8：
+
+```
+sb project add-extension 我的项目 我的扩展.js                     # 本地源码 → extensions/<id>.js + [extensions] 登记
+sb project add-extension 我的项目 https://extensions.turbowarp.org/xxx.js  # 下载 → 同上
+sb unpack 带扩展的作品.sb3 我的项目   # 内嵌 data: URL → 自动解码落盘 extensions/<id>.js
+# ↑ 之后脚本里直接用扩展积木：
+#   looks_sayforsecs MESSAGE=(Encoding_encode string="你好" code="Base64") SECS=1
+sb check 我的项目                   # check 加载 extensions/*.js：扩展积木不再报"未收录"，
+                                   # 参数名按 getInfo() 原样校验（大小写敏感）
+sb pack 我的项目 新版.sb3            # 读 extensions/<id>.js 重新编码回 data: URL（源码逐字节一致）
+```
+
+- 移除扩展：删 meta `[extensions]` 条目 + 删 `extensions/<id>.js`（两边同步；
+  pack 只认 meta，残留文件不会被打包）。
+- URL 注册的扩展不下载源码，check 不加载；要校验请先把源码 fetch 到本地。
+- 完整格式（`[extensions]` 段 / `author`·`description`·`platform`·`agent`·`notes`
+  元数据字段 / round-trip 语义）见 **`docs/format.md` §8**。
+
 ## 构建
 
 需要 C++17 编译器（开发环境为 w64devkit 的 g++ 15 + Ninja）：
@@ -181,6 +202,7 @@ src/
   sbcli_project.* 项目脚手架（init / add-*）
   sbcli_pack.*    项目目录 → .sb3（块链重建 + mutation）
   sbcli_unpack.*  .sb3/.sb2 → 项目目录
+  ext_loader.*    扩展 getInfo() 解析（node tools/fetch_tw_extension.js）
   sbcli_search.*  语法查找手册
   sbcli_meta.hpp  项目 meta 读写
   sapi.*          simdjson DOM 访问层

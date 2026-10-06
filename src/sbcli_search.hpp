@@ -37,7 +37,8 @@ struct SearchResult {
 };
 
 // 主查询：关键词可中文概念或英文 opcode 子串（不区分大小写）。
-SearchResult sbSearch(const std::string& keyword);
+// extDir 非空时（项目目录），额外加载该项目的 extensions/*.js 扩展积木并入结果。
+SearchResult sbSearch(const std::string& keyword, const std::string& extDir = {});
 
 // 命令入口（commands.cpp → main.cpp 分发）。
 int cmd_search(Args& a);

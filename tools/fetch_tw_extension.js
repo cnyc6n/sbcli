@@ -2,7 +2,10 @@
 // 自动联网寻找并解析 TurboWarp 扩展源码：
 //   输入：扩展 id（如 "Encoding"）或完整 URL
 //   输出：getInfo() 的块类型表（opcode → type + name + args）
-// 用法：node tools/fetch_tw_extension.js <扩展id 或 URL> [缓存目录]
+// 用法：node tools/fetch_tw_extension.js <id|URL|sb3文件>
+//       node tools/fetch_tw_extension.js fetch <url> <outFile>
+//         fetch 模式：下载 http(s)/data: 源码 → 解析校验 → 成功才写 outFile（本地缓存）
+//         输出与文件模式相同的单扩展 JSON（id/name/blocks/menus）。
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -267,6 +270,29 @@ print(json.dumps(d.get("extensionURLs", {})))
 async function main() {
   const input = process.argv[2];
   if (!input) { console.error('用法: node fetch_tw_extension.js <id|URL|sb3文件>'); process.exit(2); }
+
+  // fetch 模式：下载 URL → 解析校验 → 成功才写 outFile（本地缓存），输出单扩展 JSON
+  if (input === 'fetch') {
+    const url = process.argv[3], outFile = process.argv[4];
+    if (!url || !outFile) {
+      console.error('用法: node fetch_tw_extension.js fetch <url> <outFile>');
+      process.exit(2);
+    }
+    console.error(`下载 ${url.slice(0, 60)} ...`);
+    try {
+      const code = await fetchText(url);
+      const info = parseExtension(code);      // 先解析：失败则不写缓存
+      fs.mkdirSync(path.dirname(outFile), { recursive: true });
+      fs.writeFileSync(outFile, code);
+      console.error(`fetch+解析成功: id=${info.id} blocks=${info.blocks.length}`);
+      console.log('___RESULT___' + JSON.stringify(info));
+    } catch (e) {
+      console.error(`fetch 失败: ${String(e.message).slice(0, 100)}`);
+      console.log('___RESULT___{"error":true,"message":"' + String(e.message).slice(0, 100) + '"}');
+      process.exit(1);
+    }
+    process.exit(0);
+  }
 
   // sb3 文件模式：读 extensionURLs 批量解析
   if (input.endsWith('.sb3')) {

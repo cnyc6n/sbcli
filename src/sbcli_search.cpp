@@ -10,11 +10,13 @@
 //   · 无匹配：列出 opcode 子串命中 / 概念名子串命中的相近建议。
 #include "sbcli_search.hpp"
 #include "sbcli_parser.hpp"
+#include "ext_loader.hpp"   // 项目扩展积木并入搜索
 #include "sb3_tables.hpp"
 #include "commands.hpp"   // Args
 #include "jdoc.hpp"      // Json
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <set>
@@ -288,7 +290,7 @@ std::string classifyType(const std::string& opcode, const std::string& field) {
 
 } // namespace
 
-SearchResult sbSearch(const std::string& keywordRaw) {
+SearchResult sbSearch(const std::string& keywordRaw, const std::string& extDir) {
     SearchResult r;
     r.keyword = keywordRaw;
     std::string kw = toLower(keywordRaw);
@@ -333,6 +335,49 @@ SearchResult sbSearch(const std::string& keywordRaw) {
         r.matches.push_back(std::move(m));
     }
 
+    // 2.5) 项目扩展积木（extDir 非空时）：按 opcode / 扩展名 / 块文本子串匹配
+    if (!extDir.empty()) {
+        ExtInfo ext;
+        loadExtensionsFromDir(extDir, ext);
+        for (const auto& kv : ext.blockTypes) {
+            const std::string& op = kv.first;          // <扩展id>_<opcode>
+            auto lowOp = toLower(op);
+            bool hit = lowOp.find(kw) != std::string::npos;
+            // 扩展显示名也参与匹配（如搜"调色"命中 yc6ncolormaster）
+            if (!hit) {
+                size_t us = op.find('_');
+                std::string extId = us == std::string::npos ? op : op.substr(0, us);
+                auto it = ext.extNames.find(extId);
+                if (it != ext.extNames.end() && toLower(it->second).find(kw) != std::string::npos)
+                    hit = true;
+            }
+            if (!hit) continue;
+            if (std::find(matchedOps.begin(), matchedOps.end(), op) != matchedOps.end()) continue;
+
+            SearchMatch m;
+            m.opcode = op;
+            size_t us = op.find('_');
+            std::string extId = us == std::string::npos ? op : op.substr(0, us);
+            auto nit = ext.extNames.find(extId);
+            m.category = "扩展·" + (nit != ext.extNames.end() ? nit->second : extId);
+            m.templateText = "(扩展积木 " +
+                             (us == std::string::npos ? op : op.substr(us + 1)) + ")";
+            m.example = op;
+            auto pit = ext.blockParams.find(op);
+            if (pit != ext.blockParams.end()) {
+                for (const auto& f : pit->second) {
+                    SearchParam p;
+                    p.name = f;
+                    auto mit = ext.blockMenus.find(op);
+                    bool isMenu = mit != ext.blockMenus.end() && mit->second.count(f) > 0;
+                    p.type = isMenu ? "menu" : "text";
+                    m.params.push_back(std::move(p));
+                }
+            }
+            r.matches.push_back(std::move(m));
+        }
+    }
+
     // 3) 无匹配 → 相近建议
     if (r.matches.empty()) {
         // opcode 子串建议
@@ -373,7 +418,19 @@ int cmd_search(Args& a) {
         return 2;
     }
 
-    SearchResult r = sbSearch(kw);
+    // 若当前工作目录是一个 sbcli 项目（含 extensions/），自动把该项目的扩展
+    // 积木并入搜索结果。注意：loadExtensionsFromDir 接收的是**项目根**，
+    // 它内部会拼 /extensions。
+    std::string extDir;
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path cwd = fs::current_path(ec);
+        if (!ec && fs::is_directory(cwd / "extensions", ec))
+            extDir = cwd.u8string();
+    }
+
+    SearchResult r = sbSearch(kw, extDir);
 
     if (a.json) {
         Json out = Json::object();

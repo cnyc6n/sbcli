@@ -1395,6 +1395,7 @@ int cmd_project(Args& a) {
     static const std::set<std::string> SUBS = {
         "init", "add-sprite", "add-costume", "add-sound",
         "add-variable", "add-list", "add-broadcast", "add-extension",
+        "list-extensions", "remove-extension", "ext-info",
     };
     std::string sub;
     std::vector<std::string> rest;
@@ -1414,7 +1415,8 @@ int cmd_project(Args& a) {
     if (sub.empty()) {
         std::cerr << "用法：sb project <子命令> <项目目录> [参数...]\n"
                      "子命令：init / add-sprite / add-costume / add-sound /\n"
-                     "        add-variable / add-list / add-broadcast / add-extension\n";
+                     "        add-variable / add-list / add-broadcast / add-extension /\n"
+                     "        list-extensions / remove-extension / ext-info\n";
         return 2;
     }
 
@@ -1457,10 +1459,117 @@ int cmd_project(Args& a) {
             return 2;
         }
         return show(sbcliAddExtension(proj, rest[0]));
+    } else if (sub == "list-extensions") {
+        if (proj.empty()) {
+            std::cerr << "用法：sb project list-extensions <项目目录>\n";
+            return 2;
+        }
+        std::vector<ExtEntry> list;
+        ProjResult r = sbcliListExtensions(proj, list);
+        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+        for (auto& n : r.notes) std::cout << "  · " << n << "\n";
+        if (list.empty()) {
+            std::cout << "（项目没有登记任何扩展）\n";
+            return 0;
+        }
+        if (a.json) {
+            Json arr = Json::array();
+            for (const auto& e : list) {
+                Json o = Json::object();
+                o["id"] = e.id;
+                o["name"] = e.name;
+                o["blocks"] = e.blocks;
+                o["source"] = e.source;
+                o["isUrl"] = e.isUrl;
+                o["hasFile"] = e.hasFile;
+                o["parsed"] = e.parsed;
+                arr.push_back(std::move(o));
+            }
+            Json out = Json::object();
+            out["extensions"] = std::move(arr);
+            std::cout << out.dump(2) << "\n";
+            return 0;
+        }
+        std::cout << "扩展 " << list.size() << " 个：\n";
+        for (const auto& e : list) {
+            std::cout << "  " << e.id;
+            if (!e.name.empty() && e.name != e.id) std::cout << "（" << e.name << "）";
+            std::cout << "  块 " << e.blocks;
+            std::cout << "  来源 " << (e.isUrl ? "URL" : (e.hasFile ? "本地文件" : "缺失"));
+            if (!e.parsed) std::cout << "  [未解析]";
+            std::cout << "\n     " << e.source << "\n";
+        }
+        return 0;
+    } else if (sub == "remove-extension") {
+        if (rest.empty()) {
+            std::cerr << "用法：sb project remove-extension <项目目录> <扩展id> [--keep-file]\n"
+                         "  · 默认同时删除 extensions/<id>.js\n"
+                         "  · --keep-file 只取消登记，保留源码文件\n";
+            return 2;
+        }
+        // --keep-file 可能出现在参数里（main 只认自己已知的开关）
+        bool keep = a.keepFile;
+        std::vector<std::string> args;
+        for (const auto& s : rest) {
+            if (s == "--keep-file" || s == "--keep") keep = true;
+            else args.push_back(s);
+        }
+        std::string id = args.empty() ? "" : args[0];
+        return show(sbcliRemoveExtension(proj, id, keep));
+    } else if (sub == "ext-info") {
+        if (rest.empty()) {
+            std::cerr << "用法：sb project ext-info <项目目录> <扩展id>\n";
+            return 2;
+        }
+        std::vector<ExtBlockInfo> blocks;
+        ProjResult r = sbcliExtInfo(proj, rest[0], blocks);
+        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+        for (auto& n : r.notes) std::cout << "  · " << n << "\n";
+        if (a.json) {
+            Json arr = Json::array();
+            for (const auto& b : blocks) {
+                Json o = Json::object();
+                o["opcode"] = b.opcode;
+                o["fullOpcode"] = b.fullOpcode;
+                o["type"] = b.type;
+                o["text"] = b.text;
+                Json ja = Json::array();
+                for (const auto& kv : b.args) {
+                    Json ao = Json::object();
+                    ao["name"] = kv.first;
+                    ao["type"] = kv.second;
+                    auto mi = b.menus.find(kv.first);
+                    ao["menu"] = (mi == b.menus.end()) ? "" : mi->second;
+                    ja.push_back(std::move(ao));
+                }
+                o["args"] = std::move(ja);
+                arr.push_back(std::move(o));
+            }
+            Json out = Json::object();
+            out["blocks"] = std::move(arr);
+            std::cout << out.dump(2) << "\n";
+            return 0;
+        }
+        static const char* kType[] = {"命令", "报告", "布尔", "帽子"};
+        std::cout << "积木 " << blocks.size() << " 个：\n";
+        for (const auto& b : blocks) {
+            std::cout << "  " << b.fullOpcode
+                      << "  [" << kType[(b.type >= 0 && b.type <= 3) ? b.type : 0] << "]";
+            if (!b.text.empty()) std::cout << "  " << b.text;
+            std::cout << "\n";
+            for (const auto& kv : b.args) {
+                std::cout << "      - " << kv.first;
+                auto mi = b.menus.find(kv.first);
+                if (mi != b.menus.end()) std::cout << "  (菜单 " << mi->second << ")";
+                std::cout << "\n";
+            }
+        }
+        return 0;
     } else {
         std::cerr << "未知 project 子命令：" << sub << "\n"
                   << "可用：init / add-sprite / add-costume / add-sound /\n"
-                  << "      add-variable / add-list / add-broadcast / add-extension\n";
+                  << "      add-variable / add-list / add-broadcast / add-extension /\n"
+                  << "      list-extensions / remove-extension / ext-info\n";
         return 2;
     }
 }

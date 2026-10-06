@@ -33,6 +33,7 @@ struct Args {
     bool        raw = false;
     bool        dryRun = false;      // fix：只报告不写文件
     bool        force  = false;      // unpack：输出目录非空时覆盖
+    bool        keepFile = false;    // project remove-extension：只取消登记，保留源码文件
     bool        infoTable = false;
     bool        script = false;
     std::string sort = "name";

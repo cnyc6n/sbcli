@@ -115,6 +115,7 @@ int main(int argc, char** argv) {
             else if (k == "--raw")        a.raw = true;
             else if (k == "--dry-run")    a.dryRun = true;
             else if (k == "--force" || k == "-f") a.force = true;
+            else if (k == "--keep-file")  a.keepFile = true;
             else if (k == "--info-table") a.infoTable = true;
             else if (k == "--script")     a.script = true;
             else if (k == "--limit") {

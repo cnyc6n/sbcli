@@ -96,6 +96,11 @@ if (WIN32)
     target_compile_definitions(sb PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+# 源码根目录（编译期固化）：运行时定位 tools/fetch_tw_extension.js（扩展解析）。
+# 优先级：环境变量 SBCLI_TOOLS > SBCLI_SOURCE_ROOT > cwd/tools > exe 旁/上级。
+target_compile_definitions(sb PRIVATE
+    SBCLI_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+
 # ---------------------------------------------------------------------------
 # pack / unpack 回归测试（round-trip 为核心）
 #
@@ -132,3 +137,39 @@ endif()
 
 # simdjson 不开优化基本没有意义，单独给它开 -O2
 set_source_files_properties(third_party/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-O2")
+
+# ---------------------------------------------------------------------------
+# 扩展模块端到端测试（注册 / 解析块数 / check 通过·报错 / round-trip / remove）
+#
+# 链接扩展相关源码（ext_loader / sbcli_check / sbcli_project）+ pack/unpack。
+# 运行前 CWD 需在项目根（main() 自动 chdir）：node + tools/fetch_tw_extension.js
+# 负责解析扩展 getInfo()（tools/ 相对 CWD 解析）。依赖 node 在 PATH 中。
+# ---------------------------------------------------------------------------
+
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_extension.cpp)
+    add_executable(sb_extension_test
+        tests/test_extension.cpp
+        src/jdoc.cpp
+        src/sapi.cpp
+        src/miniz_impl.cpp
+        src/common.cpp
+        src/sb2.cpp
+        src/sb3_load.cpp
+        src/sb3_helpers.cpp
+        src/sb3_render.cpp
+        src/sbcli_parser.cpp
+        src/sbcli_pack.cpp
+        src/sbcli_unpack.cpp
+        src/sbcli_check.cpp
+        src/sbcli_project.cpp
+        src/ext_loader.cpp
+        third_party/simdjson.cpp
+    )
+    target_include_directories(sb_extension_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    if (WIN32)
+        target_compile_definitions(sb_extension_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+endif()

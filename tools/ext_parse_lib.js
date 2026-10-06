@@ -216,7 +216,48 @@ function parseExtension(code) {
     }
     blocks.push({ opcode: b.opcode, type: String(b.blockType), text: String(b.text), args });
   }
-  return { id: info.id, name: info.name, blocks, _warn: execError ? String(execError.message).slice(0, 80) : null };
+  return { id: info.id, name: info.name, blocks, menus: extractMenus(info),
+           _warn: execError ? String(execError.message).slice(0, 80) : null };
 }
 
-module.exports = { makeScratch, makeSandbox, fetchText, parseExtension };
+// 提取 getInfo().menus 的静态菜单项，供 sb check 校验菜单值。
+//
+// 三种形态（都是 TurboWarp/Scratch 扩展真实存在的）：
+//   a) 数组：                 menus: { encode: ['Base64', 'Hex'] }
+//   b) 对象带 items：         menus: { encode: { items: ['Base64', 'Hex'] } }
+//   c) 对象带 acceptReporters:menus: { encode: { acceptReporters: true, items: [...] } }
+// 每项可能是字符串，也可能是 {text, value}。
+//
+// 拿不到静态项时（动态菜单 getItems 是函数、itemsFromVar 等）**输出空数组**，
+// 由 check 侧静默跳过——宁可不校验，也不误报。
+function extractMenus(info) {
+  const out = {};
+  const menus = info && info.menus;
+  if (!menus || typeof menus !== 'object') return out;
+  for (const [menuId, def] of Object.entries(menus)) {
+    let raw = null;
+    if (Array.isArray(def)) {
+      raw = def;
+    } else if (def && typeof def === 'object' && Array.isArray(def.items)) {
+      // 有 getItems 函数时算动态菜单，静态 items 不权威 → 跳过
+      if (typeof def.getItems === 'function') continue;
+      raw = def.items;
+    }
+    if (!raw) continue;
+    const items = [];
+    for (const it of raw) {
+      if (typeof it === 'string' || typeof it === 'number') {
+        items.push({ text: String(it), value: String(it) });
+      } else if (it && typeof it === 'object') {
+        // {text, value}：value 才是存进 sb3 的真实值
+        const v = it.value !== undefined ? it.value : it.text;
+        items.push({ text: String(it.text !== undefined ? it.text : v),
+                     value: String(v) });
+      }
+    }
+    if (items.length) out[menuId] = items;
+  }
+  return out;
+}
+
+module.exports = { makeScratch, makeSandbox, fetchText, parseExtension, extractMenus };

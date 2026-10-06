@@ -10,6 +10,7 @@
 #include "sbcli_parser.hpp"
 #include "common.hpp"
 #include "sb3_tables.hpp"
+#include "ext_loader.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -245,6 +246,18 @@ std::string fillTemplateSB2(const std::string& tpl, const std::string& opcode,
     return out;
 }
 
+// 扩展积木的渲染上下文：项目根 + 已解析的扩展表。
+// 只在 sbcliView() 里加载一次（每个扩展文件要 spawn 一次 node，不能逐块加载）。
+struct ExtCtx {
+    bool    loaded = false;
+    ExtInfo info;
+};
+ExtCtx g_ext;
+
+std::string valueText(const SbcValue& v, int depth);   // 下面定义（extBlockText 要回调它）
+std::string extBlockText(const std::string& fullOp, int type,
+                         const std::vector<SbcParam>& params, int depth);
+
 std::string valueText(const SbcValue& v, int depth) {
     if (depth > 40) return "?";  // 防御：AST 异常深时不递归到栈溢出
     if (v.kind == SbcValue::Kind::Scalar) return v.text();
@@ -256,6 +269,11 @@ std::string valueText(const SbcValue& v, int depth) {
     if (t3 != SB3_T.end()) return fillTemplate(t3->second, op, v.args, depth);
     auto t2 = SB2_T.find(op);
     if (t2 != SB2_T.end()) return fillTemplateSB2(t2->second, op, v.args, depth);
+    if (g_ext.loaded) {
+        auto et = g_ext.info.blockTypes.find(op);
+        if (et != g_ext.info.blockTypes.end())
+            return extBlockText(op, et->second, v.args, depth);
+    }
     if (op == "argument_reporter_string_number" || op == "argument_reporter_boolean") {
         for (const auto& prm : v.args)
             if (prm.canon == "VALUE" || prm.key == "VALUE")
@@ -264,6 +282,90 @@ std::string valueText(const SbcValue& v, int depth) {
         return "?";
     }
     return "?";
+}
+
+// 常见扩展积木参数名 → 中文（与 sb3_render.cpp 的 PARAM_ZH 一致）
+const std::map<std::string, std::string>& paramZh() {
+    static const std::map<std::string, std::string> m = {
+        {"FONT", "字体"}, {"COLOR", "颜色"}, {"COLOR2", "颜色2"}, {"COLOR3", "颜色3"},
+        {"TEXT", "文字"}, {"TEXT1", "文字1"}, {"TEXT2", "文字2"}, {"MESSAGE", "消息"},
+        {"MUSIC", "音乐"}, {"FILE", "文件"}, {"PATH", "路径"}, {"NAME", "名称"},
+        {"VOLUME", "音量"}, {"SPEED", "速度"}, {"PITCH", "音调"}, {"RATE", "速率"},
+        {"LANG", "语言"}, {"LANGUAGE", "语言"}, {"URL", "地址"}, {"ID", "编号"},
+        {"X", "x"}, {"Y", "y"}, {"SIZE", "大小"}, {"SCALE", "缩放"}, {"TIMES", "次数"},
+        {"SECS", "秒数"}, {"START", "起点"}, {"END", "终点"}, {"INDEX", "序号"},
+        {"DELAY", "延迟"}, {"DURATION", "时长"}, {"TIMES2", "次数2"}, {"ANGLE", "角度"},
+        {"RADIUS", "半径"}, {"TARGET", "目标"}, {"OPTION", "选项"}, {"VALUE", "值"},
+        {"ANSWER", "回答"}, {"HEIGHT", "高度"}, {"WIDTH", "宽度"}, {"COSTUME", "造型"},
+        {"BACKDROP", "背景"}, {"SOUND", "声音"}, {"STYLE", "样式"}, {"TYPE", "类型"},
+        {"MATRIX", "矩阵"}, {"BRIGHTNESS", "亮度"}, {"SATURATION", "饱和度"},
+        {"HUE", "色相"}, {"SHADE", "色相"}, {"PERCENT", "百分比"}, {"RATIO", "比例"},
+        {"ENABLED", "启用"}, {"COLOR1", "颜色1"},
+        {"SX", "起点x"}, {"SY", "起点y"}, {"EX", "终点x"}, {"EY", "终点y"},
+        {"ITEM", "项"}, {"LIST", "列表"},
+    };
+    return m;
+}
+
+std::string paramNameZh(const std::string& k) {
+    auto it = paramZh().find(k);
+    return (it == paramZh().end()) ? k : it->second;
+}
+
+// 扩展积木：`<extId>_<blockName>`。
+// 与 sb3_render.cpp 的 extBlockRender() 对齐：
+//   REPORTER(1) → (扩展名·块名 参数…)   BOOLEAN(2) → <…>
+//   HAT(3)      → 扩展名·块名             COMMAND(0) → 扩展名·块名(参数…)
+// 参数顺序按扩展声明的 blockParams（getInfo 里的顺序），与 sb3 侧的
+// fields+inputs 排序不同但同样稳定。
+std::string extBlockText(const std::string& fullOp, int type,
+                         const std::vector<SbcParam>& params, int depth) {
+    std::string extId, blockName;
+    size_t us = fullOp.find('_');
+    if (us != std::string::npos) {
+        extId = fullOp.substr(0, us);
+        blockName = fullOp.substr(us + 1);
+    } else {
+        extId = fullOp;
+    }
+    std::string extName = extId;
+    auto nit = g_ext.info.extNames.find(extId);
+    if (nit != g_ext.info.extNames.end()) extName = nit->second;
+
+    // 参数：优先按扩展声明顺序，其次按脚本里的书写顺序
+    std::vector<std::pair<std::string, std::string>> bits;   // (显示名, 值)
+    std::set<std::string> used;
+    auto pit = g_ext.info.blockParams.find(fullOp);
+    if (pit != g_ext.info.blockParams.end()) {
+        for (const auto& nm : pit->second) {
+            const SbcParam* found = nullptr;
+            for (const auto& prm : params) {
+                const std::string& k = prm.canon.empty() ? prm.key : prm.canon;
+                if (k == nm) { found = &prm; break; }
+            }
+            if (!found) continue;
+            used.insert(nm);
+            std::string val = found->value ? valueText(*found->value, depth + 1) : "?";
+            bits.emplace_back(paramNameZh(nm), val);
+        }
+    }
+    for (const auto& prm : params) {
+        const std::string& k = prm.canon.empty() ? prm.key : prm.canon;
+        if (used.count(k)) continue;
+        std::string val = prm.value ? valueText(*prm.value, depth + 1) : "?";
+        bits.emplace_back(paramNameZh(k), val);
+    }
+
+    std::string body;
+    for (size_t i = 0; i < bits.size(); ++i) {
+        if (i) body += ", ";
+        body += bits[i].first + "=" + bits[i].second;
+    }
+    std::string text = extName + "·" + blockName;
+    if (type == 1) return "(" + text + (body.empty() ? "" : " " + body) + ")";
+    if (type == 2) return "<" + text + (body.empty() ? "" : " " + body) + ">";
+    if (type == 3) return text;
+    return text + (body.empty() ? "" : "(" + body + ")");
 }
 
 // 翻译一个积木
@@ -329,6 +431,12 @@ std::string blockText(const SbcBlock& b, int depth) {
     if (t3 != SB3_T.end()) return fillTemplate(t3->second, op, b.params, depth);
     auto t2 = SB2_T.find(op);
     if (t2 != SB2_T.end()) return fillTemplateSB2(t2->second, op, b.params, depth);
+    // 扩展积木（extensions/*.js 里声明的）—— 与 sb script 的渲染一致
+    if (g_ext.loaded) {
+        auto et = g_ext.info.blockTypes.find(op);
+        if (et != g_ext.info.blockTypes.end())
+            return extBlockText(op, et->second, b.params, depth);
+    }
     return op;  // 未收录：原样显示 opcode
 }
 
@@ -406,6 +514,16 @@ ViewReport sbcliView(const std::string& rootOrDir) {
 
     std::string rootMeta = joinRel(root, "meta.sbcli");
     if (fileExistsU8(rootMeta)) rep.projectName = loadProjectName(rootMeta);
+
+    // 加载项目扩展（extensions/*.js）→ 扩展积木才能渲染成中文而不是裸 opcode。
+    // 只在有 extensions/ 目录时才 spawn node：无扩展的项目完全不触发，
+    // 行为与改动前一致（也不产生额外开销）。
+    {
+        std::error_code ecExt;
+        if (fs::is_directory(fs::u8path(joinRel(root, "extensions")), ecExt)) {
+            if (loadExtensionsFromDir(root, g_ext.info) > 0) g_ext.loaded = true;
+        }
+    }
 
     // ---- 列出角色目录 ----
     // 与 check 的发现逻辑保持一致：

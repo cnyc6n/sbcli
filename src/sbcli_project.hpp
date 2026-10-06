@@ -7,7 +7,9 @@
 // 两者写的是同一批 meta 文件，格式规则一致（见 sbcli_fix.cpp 的实现说明）。
 #pragma once
 
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sb {
@@ -52,6 +54,44 @@ ProjResult sbcliAddBroadcast(const std::string& project, const std::string& name
 // 从本地文件或 URL 取扩展源码 → getInfo() 语法检查 → 存 extensions/<id>.js
 // 并在 meta.sbcli 的 [extensions] 段登记。
 ProjResult sbcliAddExtension(const std::string& project, const std::string& src);
+
+// ---- 扩展管理（task-7）----
+
+// 一个已注册扩展的概要（list-extensions 用）
+struct ExtEntry {
+    std::string id;
+    std::string name;       // getInfo().name（拿不到时用 id）
+    int         blocks = 0; // 块数
+    std::string source;     // meta 里登记的值：本地相对路径 或 URL
+    bool        isUrl = false;
+    bool        hasFile = false;   // extensions/<id>.js 是否真的存在
+    bool        parsed = false;    // getInfo() 是否解析成功
+};
+
+// 一个扩展积木的明细（ext-info 用）
+struct ExtBlockInfo {
+    std::string opcode;          // 短 opcode（不含扩展 id 前缀）
+    std::string fullOpcode;      // <extId>_<opcode>
+    int         type = 0;        // 0=命令 1=报告 2=布尔 3=帽子
+    std::string text;            // getInfo() 里的 text 模板
+    std::vector<std::pair<std::string, std::string>> args;  // (参数名, 类型)
+    std::map<std::string, std::string> menus;               // 参数名 → 菜单 id
+};
+
+// sb project list-extensions <项目>
+// 列出 meta 的 [extensions] 登记 + extensions/*.js 解析出的名称与块数。
+ProjResult sbcliListExtensions(const std::string& project,
+                               std::vector<ExtEntry>& out);
+
+// sb project remove-extension <项目> <id> [--keep-file]
+// 从 [extensions] 摘掉登记；keepFile=false 时同时删除 extensions/<id>.js。
+ProjResult sbcliRemoveExtension(const std::string& project, const std::string& id,
+                                bool keepFile);
+
+// sb project ext-info <项目> <id>
+// 展开该扩展的全部积木：opcode / 类型 / 参数（含菜单）。
+ProjResult sbcliExtInfo(const std::string& project, const std::string& id,
+                        std::vector<ExtBlockInfo>& out);
 
 // ---------------------------------------------------------------- 辅助
 
