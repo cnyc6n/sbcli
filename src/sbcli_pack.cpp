@@ -411,6 +411,51 @@ void routeParam(Json& b, const SbcParam& p, PackCtx& ctx,
             // 走统一 encodeValue 生成块引用，否则会把 opcode 串当广播名写坏。
             b["inputs"]["BROADCAST_INPUT"] = encodeValue(pv, ctx);
         }
+    } else if (key.size() > 9 && key.compare(0, 9, "__shadow_") == 0) {
+        // obscured shadow 双键约定（unpack 输出）：`KEY=<主块> __shadow_KEY=<桩>`
+        // 这里 KEY 已作为主键写入 b["inputs"][KEY]（块引用）；把桩块生成出来，
+        // 并把主键引用改为 [3, 主块id, 桩id]（VM 的 INPUT_DIFF_BLOCK_SHADOW）。
+        std::string target = key.substr(9);   // 原始槽键（如 COSTUME）
+        if (target.empty() || !b["inputs"].contains(target)) {
+            // 主键不存在：兜底当普通 reporter 处理（不应发生，unpack 保证顺序）
+            b["inputs"][key] = encodeValue(pv, ctx);
+            return;
+        }
+        // 桩值：Reporter 形态（unpack 输出的是 (桩opcode FIELD=值)）
+        std::string stubOp, stubField, stubVal;
+        if (pv.kind == SbcValue::Kind::Reporter) {
+            stubOp = pv.scalar.text;
+            stubVal = stubValueOf(pv, &stubField);
+        } else {
+            stubOp = menuStubOpcode(opcode, target);
+            stubVal = pv.scalar.text;
+        }
+        if (!stubOp.empty() && !blockId.empty()) {
+            std::string stubId = ctx.newId();
+            Json stub = Json::object();
+            stub["opcode"]   = stubOp;
+            stub["next"]     = Json();
+            stub["parent"]   = Json(blockId);
+            stub["inputs"]   = Json::object();
+            Json sf = Json::object();
+            Json sv = Json::array();
+            sv.push_back(stubVal);
+            sf[stubField.empty() ? target : stubField] = sv;
+            stub["fields"]   = sf;
+            stub["shadow"]   = true;
+            stub["topLevel"] = false;
+            ctx.blocks[stubId] = std::move(stub);
+            // 主键引用改成 [3, 主块id, 桩id]
+            Json main = b["inputs"][target];
+            if (main.is_array() && !main.empty() && main[0].is_number_integer() &&
+                (main[0].get<int>() == 1 || main[0].get<int>() == 2 || main[0].get<int>() == 3)) {
+                Json r = Json::array();
+                r.push_back(3);
+                r.push_back(main[1]);
+                r.push_back(stubId);
+                b["inputs"][target] = r;
+            }
+        }
     } else if (menuFieldKeys().count(key) && isHatWithOwnField(opcode)) {
         // 帽子块自己的字段（KEY_OPTION / BROADCAST_OPTION / STOP_OPTION…）：
         // 直接写进**块自身 fields**（真实作品：event_whenkeypressed 523/523、

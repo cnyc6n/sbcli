@@ -285,8 +285,11 @@ std::string menuStubReporterText(UnpackCtx& c, const std::string& blockId) {
     return std::string();
 }
 
-// 一个 input 槽 → 参数值文本
-std::string inputText(UnpackCtx& c, const Elem& arr) {
+// 一个 input 槽 → 参数值文本。
+// slotKey：槽名（如 COSTUME / SOUND_MENU）。obscured shadow（kind 3）需要它来
+// 输出 `KEY=<主块> __shadow_KEY=<桩>` 双键约定，让 pack 能对称重建 [3,主块,桩]。
+std::string inputText(UnpackCtx& c, const Elem& arr,
+                      const std::string& slotKey = std::string()) {
     if (!arr.is_array() || arr.empty()) return arr.ok() ? rawJsonOf(arr) : "?";
     int kind = arr.op(0).is_number() ? (int)arr.op(0).i64() : 0;
     Elem v = arr.op(1);
@@ -347,15 +350,22 @@ std::string inputText(UnpackCtx& c, const Elem& arr) {
             return "?";
         case 3:
             // [3, 主块, 阴影桩] —— obscured shadow（VM 的 INPUT_DIFF_BLOCK_SHADOW）。
-            // VM 语义（见 scratch-vm sb3.js deserializeInputs）：
-            //   block  = 主块（input.block，执行用）
-            //   shadow = 阴影桩（input.shadow，仅 UI 默认值；主块存在时被遮挡）
-            // 因此：**主块优先输出**（reporter 形态）；主块不存在时才回退阴影桩。
-            // 主块引用（字符串）：blockExpr 展开成 reporter
+            // VM 语义：block=主块（执行用），shadow=桩（UI 默认值，被主块遮挡）。
+            // **主块 + 桩都保留**：主块输出 reporter 形态；桩用双键约定带出
+            //   `KEY=<主块> __shadow_KEY=<桩reporter>`
+            // 这样 pack 能重建 [3, 主块id, 桩id]，块数与原文件完全一致。
             if (v.is_string()) {
                 bool ok = false;
                 std::string s = blockExpr(c, std::string(v.sv()), &ok);
-                if (ok) return s;
+                if (ok) {
+                    // 主块展开成功：若第三元素是 shadow 桩，追加双键
+                    if (arr.size() > 2 && arr.op(2).is_string()) {
+                        std::string stub = menuStubReporterText(c, std::string(arr.op(2).sv()));
+                        if (!stub.empty() && !slotKey.empty())
+                            return s + " __shadow_" + slotKey + "=" + stub;
+                    }
+                    return s;
+                }
                 // 主块展开失败（悬垂引用）：若阴影桩是菜单桩，用它的 reporter 形态
                 std::string rep = (arr.size() > 2 && arr.op(2).is_string())
                     ? menuStubReporterText(c, std::string(arr.op(2).sv())) : std::string();
@@ -503,7 +513,7 @@ std::string paramsText(UnpackCtx& c, const Elem& b, const std::string& op, bool 
                 if (it != argIds.end())
                     key = "ARG" + std::to_string((int)(it - argIds.begin()) + 1);
             }
-            out += " " + key + "=" + inputText(c, inputs.at(k));
+            out += " " + key + "=" + inputText(c, inputs.at(k), key);
         }
     }
     return out;
@@ -531,7 +541,7 @@ std::string proceduresCallExpr(UnpackCtx& c, const Elem& b) {
     for (const auto& aid : argIds) {
         Elem inputs = b.at("inputs");
         if (!inputs.is_object() || !inputs.contains(aid)) continue;
-        out += " ARG" + std::to_string(n++) + "=" + inputText(c, inputs.at(aid));
+        out += " ARG" + std::to_string(n++) + "=" + inputText(c, inputs.at(aid), aid);
     }
     out += ")";
     return out;
