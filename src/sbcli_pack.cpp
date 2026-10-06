@@ -345,18 +345,9 @@ std::string emitReporterBlock(const SbcValue& val, PackCtx& ctx) {
             nm = &val.args[0].value->scalar.text;
         b["fields"]["VALUE"] = Json::array();
         b["fields"]["VALUE"].push_back(nm ? *nm : std::string());
-        b["shadow"] = true;
-    } else if (op == "ccw_hat_parameter") {
-        // CCW 扩展的「帽子参数定义块」：shadow=true + fields.VALUE（与 argument_reporter
-        // 同类）。unpack 输出 reporter 形态 (ccw_hat_parameter VALUE="senderID")，
-        // 这里还原成 shadow 参数块，否则扩展块的自定义参数在 Scratch 里显示异常。
-        const std::string* nm = nullptr;
-        if (!val.args.empty() && val.args[0].value &&
-            val.args[0].value->kind == SbcValue::Kind::Scalar)
-            nm = &val.args[0].value->scalar.text;
-        b["fields"]["VALUE"] = Json::array();
-        b["fields"]["VALUE"].push_back(nm ? *nm : std::string());
-        b["shadow"] = true;
+        // body 里作为普通 reporter 使用（原文件 shadow=false）。
+        // prototype 参数占位块由 protoInputs 循环单独生成（那里才是 shadow=true）。
+        b["shadow"] = false;
     } else {
         for (const auto& p : val.args) {
             if (!p.value) continue;
@@ -412,7 +403,14 @@ void routeParam(Json& b, const SbcParam& p, PackCtx& ctx,
         b["fields"]["LIST"].push_back(nm);
         b["fields"]["LIST"].push_back(id);
     } else if (key == "BROADCAST_INPUT") {
-        b["inputs"]["BROADCAST_INPUT"] = broadcastInput(pv.scalar.text);
+        if (pv.kind == SbcValue::Kind::Scalar) {
+            // 普通广播名：内联 [2,[10,"名"]]
+            b["inputs"]["BROADCAST_INPUT"] = broadcastInput(pv.scalar.text);
+        } else {
+            // 广播名是 reporter（如 BROADCAST_INPUT=(data_itemoflist ...)）：
+            // 走统一 encodeValue 生成块引用，否则会把 opcode 串当广播名写坏。
+            b["inputs"]["BROADCAST_INPUT"] = encodeValue(pv, ctx);
+        }
     } else if (menuFieldKeys().count(key) && isHatWithOwnField(opcode)) {
         // 帽子块自己的字段（KEY_OPTION / BROADCAST_OPTION / STOP_OPTION…）：
         // 直接写进**块自身 fields**（真实作品：event_whenkeypressed 523/523、
@@ -698,8 +696,11 @@ std::string emitBlock(const SbcBlock& blk, PackCtx& ctx,
             prevInSub = cid;
         }
         if (isDef) {
-            // 定义体直接链到 prototype.next（[0]=then）；忽略 else（定义体无分支）
-            ctx.blocks[protoId]["next"] = firstChild;
+            // 定义体挂在 **definition.next**（Scratch 官方结构，实测 8 作品 +
+            // Gandi 的 procedures_definition.next 都指向 body 首块，proto.next 为 null）。
+            // 渲染器、Scratch 编辑器都沿 definition.next 显示定义体；
+            // 之前挂 proto.next 导致重打包后 def.next=null → 定义体不显示。
+            ctx.blocks[bid]["next"] = firstChild;
         } else if (si == 0) {
             ctx.blocks[bid]["inputs"]["SUBSTACK"]  = refInput(firstChild);
         } else if (si == 1) {

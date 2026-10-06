@@ -124,6 +124,9 @@ struct UnpackCtx {
     int unknown = 0;
     int depth   = 0;
     std::set<std::string> onStack;      // 正在展开的块（防成环）
+    // 定义体已沿 definition.next 输出的 procedures_definition：emitChain
+    // 走到它时不再跟 next（body 已由 emitOne 缩进输出，防顶层重复）。
+    std::set<std::string> defBodyViaNext;
 };
 
 void buildMaps(UnpackCtx& c) {
@@ -682,23 +685,38 @@ void emitOne(UnpackCtx& c, const std::string& id, int depth, const std::string& 
     const Elem& b = *bp;
     const std::string ind = indentOf(depth);
 
-    // --- procedures_definition：先出行，再把定义体（挂在 prototype.next 上）缩进展开
+    // --- procedures_definition：先出行，再把定义体缩进展开
     if (op == "procedures_definition") {
         bool hasArgs = false;
         std::string ps = definitionParams(c, b, &hasArgs);
         (void)hasArgs;
         c.lines.push_back(ind + "procedures_definition " + ps);
-        // 定义体在 prototype 的 next 链上（Scratch 标准结构）：
-        // pack 侧也是把定义体挂到 prototype.next，这里必须对称地认出来。
-        Elem inputs = b.at("inputs");
-        if (inputs.is_object() && inputs.contains("custom_block")) {
-            Elem arr = inputs.at("custom_block");
-            if (arr.is_array() && arr.size() > 1 && arr.op(1).is_string()) {
-                std::string pid = std::string(arr.op(1).sv());
-                const Elem* proto = blockOf(c, pid);
-                if (proto) {
-                    Elem nx = proto->at("next");
-                    if (nx.is_string()) emitChain(c, std::string(nx.sv()), depth + 1);
+        // 定义体位置（依据 scratch-vm：执行链 thread.goToNextBlock → block.next，
+        // 所以 body 挂在 **definition.next**；prototype.next 通常为 null）。
+        // 实测（core-parser/lead 多轮核对）：8 标准作品 + Gandi 的
+        // procedures_definition.next 全部指向 body 首块，prototype.next 全为 null。
+        // 之前只跟 prototype.next → body 顶格输出、pack 认不出子栈 → 定义体丢失。
+        // 这里**优先 definition.next**，空则回退 prototype.next（兼容极老作品）。
+        bool emitted = false;
+        {
+            Elem nx = b.at("next");
+            if (nx.is_string()) {
+                emitChain(c, std::string(nx.sv()), depth + 1);
+                emitted = true;
+                c.defBodyViaNext.insert(id);   // 标记：emitChain 不要再跟（防重复输出）
+            }
+        }
+        if (!emitted) {
+            Elem inputs = b.at("inputs");
+            if (inputs.is_object() && inputs.contains("custom_block")) {
+                Elem arr = inputs.at("custom_block");
+                if (arr.is_array() && arr.size() > 1 && arr.op(1).is_string()) {
+                    std::string pid = std::string(arr.op(1).sv());
+                    const Elem* proto = blockOf(c, pid);
+                    if (proto) {
+                        Elem nx = proto->at("next");
+                        if (nx.is_string()) emitChain(c, std::string(nx.sv()), depth + 1);
+                    }
                 }
             }
         }
@@ -774,6 +792,10 @@ void emitChain(UnpackCtx& c, const std::string& firstId, int depth) {
         c.onStack.insert(cur);
         emitOne(c, cur, depth, op);
         c.onStack.erase(cur);
+
+        // 定义体已沿 definition.next 输出（emitOne 里 emitChain 递归了 body）：
+        // 主循环不能再跟它的 next，否则 body 会顶格重复输出。
+        if (op == "procedures_definition" && c.defBodyViaNext.count(cur)) return;
 
         Elem nx = b.at("next");
         cur = nx.is_string() ? std::string(nx.sv()) : std::string();
