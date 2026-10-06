@@ -237,6 +237,76 @@ std::string Renderer::valueOf(const Elem& b, const std::string& key, bool menu) 
     return "?";
 }
 
+// 渲染扩展积木（内置/自定义）：
+//  - 提取扩展 id（opcode 第一个 _ 前）+ 块名
+//  - 按 blockType 用括号形态：HAT/COMMAND 无括号，REPORTER 用 ()，BOOLEAN 用 <>
+//  - 显示「扩展名·块名」+ 参数（中文参数名 + 值）
+std::string Renderer::extBlockRender(const Elem& b, int type, const std::string& fullOp) {
+    std::string extId, blockName;
+    size_t us = fullOp.find('_');
+    if (us != std::string::npos) {
+        extId = fullOp.substr(0, us);
+        blockName = fullOp.substr(us + 1);
+    } else {
+        extId = fullOp;
+    }
+    // 扩展显示名：内置 EXT_NAMES 优先，否则自定义 CUSTOM_EXT_NAMES，否则原 id
+    std::string extName = extId;
+    {
+        auto it = EXT_NAMES.find(extId);
+        if (it != EXT_NAMES.end()) extName = it->second;
+        else {
+            auto jt = CUSTOM_EXT_NAMES.find(extId);
+            if (jt != CUSTOM_EXT_NAMES.end()) extName = jt->second;
+        }
+    }
+
+    // 参数（中文键 = 值）——复用 generic() 的 PARAM_ZH 映射
+    static const std::map<std::string, std::string> PARAM_ZH = {
+        {"FONT", "字体"}, {"COLOR", "颜色"}, {"COLOR2", "颜色2"}, {"COLOR3", "颜色3"},
+        {"TEXT", "文字"}, {"TEXT1", "文字1"}, {"TEXT2", "文字2"}, {"MESSAGE", "消息"},
+        {"MUSIC", "音乐"}, {"FILE", "文件"}, {"PATH", "路径"}, {"NAME", "名称"},
+        {"VOLUME", "音量"}, {"SPEED", "速度"}, {"PITCH", "音调"}, {"RATE", "速率"},
+        {"LANG", "语言"}, {"LANGUAGE", "语言"}, {"URL", "地址"}, {"ID", "编号"},
+        {"X", "x"}, {"Y", "y"}, {"SIZE", "大小"}, {"SCALE", "缩放"}, {"TIMES", "次数"},
+        {"SECS", "秒数"}, {"START", "起点"}, {"END", "终点"}, {"INDEX", "序号"},
+        {"DELAY", "延迟"}, {"DURATION", "时长"}, {"TIMES2", "次数2"}, {"ANGLE", "角度"},
+        {"RADIUS", "半径"}, {"TARGET", "目标"}, {"OPTION", "选项"}, {"VALUE", "值"},
+        {"ANSWER", "回答"}, {"HEIGHT", "高度"}, {"WIDTH", "宽度"}, {"COSTUME", "造型"},
+        {"BACKDROP", "背景"}, {"SOUND", "声音"}, {"STYLE", "样式"}, {"TYPE", "类型"},
+        {"MATRIX", "矩阵"}, {"BRIGHTNESS", "亮度"}, {"SATURATION", "饱和度"},
+        {"HUE", "色相"}, {"SHADE", "色相"}, {"PERCENT", "百分比"}, {"RATIO", "比例"},
+        {"ENABLED", "启用"}, {"COLOR1", "颜色1"}, {"COLOR2", "颜色2"},
+        {"SX", "起点x"}, {"SY", "起点y"}, {"EX", "终点x"}, {"EY", "终点y"},
+        {"WIDTH", "宽"}, {"HEIGHT", "高"}, {"ITEM", "项"}, {"LIST", "列表"},
+    };
+    auto paramName = [&](const std::string& k) {
+        auto it = PARAM_ZH.find(k);
+        return it != PARAM_ZH.end() ? it->second : k;
+    };
+    std::vector<std::string> bits;
+    Elem fields = b.at("fields");
+    if (fields.is_object()) {
+        for (auto& k : sortedKeysOf(fields.obj()))
+            bits.push_back(paramName(k) + "=" + valueOf(b, k));
+    }
+    Elem inputs = b.at("inputs");
+    if (inputs.is_object()) {
+        for (auto& k : sortedKeysOf(inputs.obj()))
+            bits.push_back(paramName(k) + "=" + inputText(b, k));
+    }
+    std::string body;
+    for (size_t i = 0; i < bits.size(); ++i) {
+        if (i) body += ", ";
+        body += bits[i];
+    }
+    std::string text = extName + "·" + blockName;
+    if (type == 1) return "(" + text + (body.empty() ? "" : " " + body) + ")";
+    if (type == 2) return "<" + text + (body.empty() ? "" : " " + body) + ">";
+    if (type == 3) return text;   // HAT：无括号
+    return text + (body.empty() ? "" : "(" + body + ")");   // COMMAND
+}
+
 std::string Renderer::generic(const Elem& b) {
     std::vector<std::string> bits;
     // 常见扩展积木参数名 → 中文（text/music/translate 等扩展）
@@ -408,6 +478,14 @@ std::string Renderer::render(const std::string& bid) {
         if (t2 != SB2_T.end()) tplPtr = &t2->second;
     }
     if (tplPtr == nullptr) {
+        // 未收录模板 → 查扩展积木表（内置 + 自定义）
+        // 扩展块显示为「扩展名·块名」，并按 blockType 用正确括号形态。
+        // 注意：扩展块不进 missing（它们是已注册的积木，不是未知块）。
+        auto extIt = EXT_BLOCK_TYPES.find(op);
+        if (extIt != EXT_BLOCK_TYPES.end()) return extBlockRender(b, extIt->second, op);
+        auto cextIt = CUSTOM_EXT_BLOCK_TYPES.find(op);
+        if (cextIt != CUSTOM_EXT_BLOCK_TYPES.end())
+            return extBlockRender(b, cextIt->second, op);
         missing[op]++;
         return generic(b);
     }

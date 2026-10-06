@@ -55,6 +55,9 @@ private:
     int m_renderDepth = 0;   // 渲染递归深度，防止块引用成环时栈溢出
     std::unordered_map<std::string, std::string> m_renderCache;  // id → 已渲染文本（reporter 记忆化）
 
+    // 扩展积木渲染（内置/自定义）：type 0=COMMAND 1=REPORTER 2=BOOLEAN 3=HAT
+    std::string extBlockRender(const Elem& b, int type, const std::string& fullOp);
+
     std::string inputValue(const Elem& arr, bool menu=false);
     std::string prim(const Elem& x, bool menu=false);
     std::string valueOf(const Elem& b, const std::string& key, bool menu=false);
