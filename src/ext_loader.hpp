@@ -11,6 +11,8 @@ struct Sb3File;
 struct ExtInfo {
     std::map<std::string, int> blockTypes;        // opcode → 类型（0..3）
     std::map<std::string, std::string> extNames;  // 扩展id → 名称
+    // opcode → getInfo().blocks[].text（块模板文本，如 "encode [string] in [code]"）
+    std::map<std::string, std::string> blockTexts;
     // opcode → 允许的参数名集合（来自 getInfo().blocks[].arguments 的键）
     std::map<std::string, std::vector<std::string>> blockParams;
     // opcode → 菜单参数名 → 菜单 id（用于校验菜单值）

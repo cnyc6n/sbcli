@@ -616,6 +616,8 @@ ProjResult sbcliExtInfo(const std::string& project, const std::string& id,
         b.fullOpcode = id + "_" + op;
         auto tit = ei.blockTypes.find(b.fullOpcode);
         b.type = (tit != ei.blockTypes.end()) ? tit->second : 0;
+        auto bt = ei.blockTexts.find(b.fullOpcode);
+        if (bt != ei.blockTexts.end()) b.text = bt->second;
 
         auto pit = ei.blockParams.find(b.fullOpcode);
         if (pit != ei.blockParams.end())

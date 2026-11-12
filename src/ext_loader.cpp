@@ -159,6 +159,9 @@ static int fillFromJson(const std::string& jsonOut, ExtInfo& out) {
             std::string fullOp = extId + "_" + op;
             out.blockTypes[fullOp] = type;
             out.blockOwner[fullOp] = extId;
+            // 块模板文本（ext-info 展示用）
+            if (b.contains("text") && b["text"].is_string())
+                out.blockTexts[fullOp] = b["text"].get<std::string>();
             // 参数名（getInfo().arguments 的键）→ 用于 check 的参数校验
             if (b.contains("args") && b["args"].is_object()) {
                 std::vector<std::string> names;
