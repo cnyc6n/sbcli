@@ -716,9 +716,19 @@ struct Parser {
     }
 
     void collectSubstacks(SbcBlock& blk, int base) {
+        // 跳过紧跟在块后的注释行（如 unpack 为未知积木输出的「# 未知积木: xxx」）。
+        // 否则 cur() 是 COMMENT，hasChild 判成 false → 子栈被当成空，
+        // 后续缩进更深的块会被误判成「缩进不对」并错位成同级块。
+        size_t save = i;
+        while (!eof()) {
+            const Line& lk = L[i];
+            if (lk.toks.empty() || lk.toks[0].type == SbTok::COMMENT) { ++i; continue; }
+            break;
+        }
         int childIndent = eof() ? 0 : cur().indent;
         bool hasChild = !eof() && !cur().toks.empty() &&
                         cur().toks[0].type == SbTok::OPCODE && childIndent > base;
+        if (!hasChild) i = save;   // 没形成子栈：把跳过的注释还给外层循环
 
         if (blk.opcode == "control_if_else") {
             // 第一分支（"那么"）
@@ -748,11 +758,19 @@ struct Parser {
                 }
                 blk.elseLine = el.no;
                 ++i;
+                // 同 725 行：else 后可能紧跟注释行（未知积木的说明），先跳过再判子栈
+                size_t saveElse = i;
+                while (!eof()) {
+                    const Line& lk = L[i];
+                    if (lk.toks.empty() || lk.toks[0].type == SbTok::COMMENT) { ++i; continue; }
+                    break;
+                }
                 int elseChild = eof() ? 0 : cur().indent;
                 if (!eof() && !cur().toks.empty() &&
                     cur().toks[0].type == SbTok::OPCODE && elseChild > base) {
                     blk.substacks.push_back(parseStack(elseChild));
                 } else {
+                    i = saveElse;
                     blk.substacks.emplace_back();
                 }
             } else if (blk.substacks.size() > 1) {

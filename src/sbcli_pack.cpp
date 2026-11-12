@@ -73,7 +73,9 @@ Json primShadow(const SbToken& t) {
                           (s.front() == '\'' && s.back() == '\'')))
         s = s.substr(1, s.size() - 2);
 
-    bool isNum = !s.empty();
+    // **关键**：用户显式加引号（t.quoted）= 明确要字符串，绝不当数字。
+    // 否则 "000000000000000" 会被 stoll 成 0（前导零丢失）、"007" 变 7。
+    bool isNum = !s.empty() && !t.quoted;
     bool seenDot = false;
     for (size_t i = 0; i < s.size(); ++i) {
         char c = s[i];
@@ -518,7 +520,11 @@ void routeParam(Json& b, const SbcParam& p, PackCtx& ctx,
         // 用启发式避免重打包时分类漂移。
         // 规则：键名全大写（含下划线/数字）且值是不含空白的标量 → field；否则 input。
         // 仅对未知 opcode 生效；已知 opcode 走上面的精确表，行为不变。
-        bool allUpper = !key.empty();
+        // 规则：键名全大写（含下划线/数字）**且长度 >= 2** 且值是不含空白的标量 → field。
+        // 长度限制很关键：扩展块的数值参数常以单字母命名（A/B/C/X/Y/M/N…），
+        // 如 truefantommath_clamp_block 的 B=-1 C=1。单字母大写判成 field 会让
+        // 这些参数从 inputs 漂移到 fields（数据仍在但结构变了，round-trip 不保真）。
+        bool allUpper = key.size() >= 2;
         for (char c : key)
             if (!(::isupper((unsigned char)c) || c == '_' || ::isdigit((unsigned char)c))) {
                 allUpper = false; break;

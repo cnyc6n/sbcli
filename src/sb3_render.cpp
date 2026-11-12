@@ -301,8 +301,13 @@ std::string Renderer::extBlockRender(const Elem& b, int type, const std::string&
     }
     Elem inputs = b.at("inputs");
     if (inputs.is_object()) {
-        for (auto& k : sortedKeysOf(inputs.obj()))
+        for (auto& k : sortedKeysOf(inputs.obj())) {
+            // 子栈不是参数：扩展积木也可能带 SUBSTACK/SUBSTACK2
+            //（如 Window Controls·changeX 的 if 分支），塞进参数列表会渲染成
+            // “changeX(x=5, SUBSTACK=如果 …)”这种错误形态。
+            if (k == "SUBSTACK" || k == "SUBSTACK2") continue;
             bits.push_back(paramName(k) + "=" + inputText(b, k));
+        }
     }
     std::string body;
     for (size_t i = 0; i < bits.size(); ++i) {

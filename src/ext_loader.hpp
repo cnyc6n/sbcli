@@ -24,6 +24,10 @@ struct ExtInfo {
     std::map<std::string, std::string> blockOwner;
     // meta.sbcli [extensions] 段登记的所有扩展 id（权威清单，无论本地/URL/加载成败）
     std::set<std::string> registeredIds;
+    // 菜单桩 opcode 集合（形如 <extId>_menu_<menuId>）。
+    // 这些块不在 getInfo().blocks 里，只由 getInfo().menus 定义，但 sb3 里会作为
+    // shadow 块出现（如 Encoding_menu_encode）。check 必须把它们视为已知。
+    std::set<std::string> menuStubOpcodes;
     // 登记了但**没加载到定义**的扩展 id：
     //   本地相对路径但源码缺失；URL 下载失败/超时；getInfo() 解析失败。
     // 调用方（sb check）据此把这类扩展的积木从 unknown-opcode 错误降级为警告。

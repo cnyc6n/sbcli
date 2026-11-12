@@ -330,8 +330,12 @@ static std::map<std::string, std::string>                       g_extBlockOwner;
 // （本地源码缺失 / URL 下载失败）。后者的积木不报 unknown-opcode 错误，降级为警告。
 static std::set<std::string> g_extRegisteredIds;
 static std::set<std::string> g_extFailedIds;
+// 菜单桩 opcode（<extId>_menu_<menuId>）：不在 getInfo().blocks 里，
+// 只由 getInfo().menus 定义，但 sb3 里作为 shadow 块真实存在 → 必须视为已知。
+static std::set<std::string> g_extMenuStubs;
 static bool isKnownOpcodeExt(const std::string& op) {
-    return sbcIsKnownOpcode(op) || g_extBlockTypes.count(op) > 0;
+    return sbcIsKnownOpcode(op) || g_extBlockTypes.count(op) > 0 ||
+           g_extMenuStubs.count(op) > 0;
 }
 
 // 未知 opcode 是否属于「meta 已登记」的扩展：opcode 前缀 = id + "_"。
@@ -492,6 +496,7 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
     g_extBlockOwner.clear();
     g_extRegisteredIds.clear();
     g_extFailedIds.clear();
+    g_extMenuStubs.clear();
     {
         ExtInfo ext;
         loadExtensionsFromDir(root, ext);
@@ -502,6 +507,7 @@ CheckReport sbcliCheck(const std::string& rootOrDir) {
         g_extBlockOwner  = ext.blockOwner;
         g_extRegisteredIds = ext.registeredIds;
         g_extFailedIds     = ext.failedIds;
+        g_extMenuStubs     = ext.menuStubOpcodes;
     }
 
     // ---- 收集 block.sbcli ----

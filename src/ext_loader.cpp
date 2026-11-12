@@ -124,11 +124,19 @@ static int fillFromJson(const std::string& jsonOut, ExtInfo& out) {
         // 菜单 id 在扩展内唯一，这里按 extId 加前缀隔离，避免不同扩展同名菜单串味。
         if (ext.contains("menus") && ext["menus"].is_object()) {
             for (auto mi = ext["menus"].begin(); mi != ext["menus"].end(); ++mi) {
-                const Json& items = mi.value();
-                if (!items.is_array()) continue;
+                // 菜单桩块（sb3 里的 shadow 块）固定形如 <extId>_menu_<menuId>，
+                // 它**不在** getInfo().blocks 里，但确实是合法积木（如
+                // Encoding_menu_encode）。无条件登记，供 check 放行。
+                out.menuStubOpcodes.insert(extId + "_menu_" + mi.key());
+
+                // 取值集合：兼容裸数组 与 {items:[...]} 两种形态。
+                const Json& mv = mi.value();
+                const Json* items = &mv;
+                if (mv.is_object() && mv.contains("items")) items = &mv["items"];
+                if (!items->is_array()) continue;
                 std::string key = extId + "::" + mi.key();
                 std::set<std::string> vals;
-                for (const auto& item : items) {
+                for (const auto& item : *items) {
                     if (item.is_string())
                         vals.insert(item.get<std::string>());
                     else if (item.is_object() && item.contains("value") &&
