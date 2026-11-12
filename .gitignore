@@ -13,8 +13,8 @@
 /test_*.sb3
 /make_fixtures.py
 
-# 本地文档（仅本地保留，不推送）
-/docs/
+# 文档：docs/ 入库 —— sbcli 文本格式是用户可见契约，必须随代码发布。
+# CHANGELOG 仍本地保留（发布说明写 GitHub Release）。
 /CHANGELOG.md
 
 # 测试：源码入库（CI 需要），二进制已被上方 *.exe/*.obj/*.o 排除

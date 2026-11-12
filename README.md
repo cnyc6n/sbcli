@@ -38,7 +38,7 @@ JSON 解析基于 [simdjson](https://github.com/simdjson/simdjson)（只读 DOM�
 
 | 命令     | 作用 |
 |----------|------|
-| `project`| 项目脚手架：`init` / `add-sprite` / `add-costume` / `add-sound` / `add-variable` / `add-list` / `add-broadcast` / `add-extension` |
+| `project`| 项目脚手架：`init` / `add-sprite` / `add-costume` / `add-sound` / `add-variable` / `add-list` / `add-broadcast` / `add-extension` / `remove-extension` / `list-extensions` / `ext-info` |
 | `unpack` | 把 .sb3/.sb2 作品拆成 sbcli 项目目录（含素材导出） |
 | `check`  | 检查项目的脚本语法 / 结构 / 引用（四类；`--json` 结构化输出，有错退出码 1） |
 | `fix`    | 发现即声明：把脚本引用到的变量/列表/广播/造型/声音自动登记进 meta（**不改动 block.sbcli**，幂等） |
@@ -133,14 +133,17 @@ sb project add-extension 我的项目 https://extensions.turbowarp.org/xxx.js  #
 sb unpack 带扩展的作品.sb3 我的项目   # 内嵌 data: URL → 自动解码落盘 extensions/<id>.js
 # ↑ 之后脚本里直接用扩展积木：
 #   looks_sayforsecs MESSAGE=(Encoding_encode string="你好" code="Base64") SECS=1
-sb check 我的项目                   # check 加载 extensions/*.js：扩展积木不再报"未收录"，
-                                   # 参数名按 getInfo() 原样校验（大小写敏感）
+sb check 我的项目                   # check 加载 extensions/*.js + URL 登记的扩展（带 .sbcli-cache 缓存）：
+                                   # 扩展积木不再报"未收录"，参数名按 getInfo() 原样校验（大小写敏感）
 sb pack 我的项目 新版.sb3            # 读 extensions/<id>.js 重新编码回 data: URL（源码逐字节一致）
+sb project remove-extension 我的项目 Encoding     # 移除扩展：删登记 + 删源码（--keep-file 保留源码）
 ```
 
-- 移除扩展：删 meta `[extensions]` 条目 + 删 `extensions/<id>.js`（两边同步；
-  pack 只认 meta，残留文件不会被打包）。
-- URL 注册的扩展不下载源码，check 不加载；要校验请先把源码 fetch 到本地。
+- 仅 URL 登记（meta 写 `id = https://...`）的扩展：`sb check` 会**联网下载**定义并
+  缓存到 `<项目>/.sbcli-cache/<id>.js`（之后不再联网）；断网/坏 URL 时**不崩**，
+  相关积木降级为 `ext-unloaded` 警告（不是 unknown-opcode 错误）。
+- 移除扩展用 `sb project remove-extension`（meta 与文件两边同步）；
+  pack 只认 meta，残留文件不会被打包。
 - 完整格式（`[extensions]` 段 / `author`·`description`·`platform`·`agent`·`notes`
   元数据字段 / round-trip 语义）见 **`docs/format.md` §8**。
 
