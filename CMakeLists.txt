@@ -29,6 +29,8 @@ add_executable(sb
     src/sbcli_check.cpp
     src/sbcli_fix.cpp
     src/sbcli_view.cpp
+    src/sbcli_edit.cpp
+    src/sbcli_merge.cpp
     src/sbcli_project.cpp
     src/sbcli_search.cpp
     src/sbcli_pack.cpp

@@ -630,4 +630,138 @@ ProjResult sbcliExtInfo(const std::string& project, const std::string& id,
     return r;
 }
 
+
+// ---------------------------------------------------------------- 素材删/改/重命名
+
+namespace {
+
+// 从 meta 摘掉一项素材；delFile 时同时删 assets/ 下的文件。
+ProjResult dropAsset(const std::string& project, const std::string& sprite,
+                     const std::string& name, bool isCostume, bool delFile) {
+    std::string root;
+    ProjResult err;
+    if (!requireRoot(project, root, err)) return err;
+    std::string dir;
+    ProjResult rs = sbcliResolveSprite(root, sprite, dir);
+    if (!rs.ok) return rs;
+    if (name.empty()) return fail("缺少素材名");
+
+    std::string metaPath = joinRel(dir, "meta.sbcli");
+    CharMeta cm = loadCharMeta(metaPath);
+    auto& table = isCostume ? cm.costumes : cm.sounds;
+    auto it = table.find(name);
+    if (it == table.end())
+        return fail(std::string(isCostume ? "造型" : "声音") + "「" + name +
+                    "」不在这个角色的 meta 里（用 `sb view` 或看 meta.sbcli 确认名字）");
+
+    std::string rel = it->second;
+    table.erase(it);
+    std::string spriteDisplay = cm.has("name") ? cm.get("name")
+                                               : norm(fs::path(dir).filename().u8string());
+    bool isStage = (norm(fs::path(dir).filename().u8string()) == "stage");
+    writeCharMeta(metaPath, cm, spriteDisplay, isStage);
+
+    ProjResult r;
+    r.ok = true;
+    r.created.push_back(relToRoot(root, metaPath));
+    r.notes.push_back(std::string("已移除") + (isCostume ? "造型" : "声音") +
+                      "「" + name + "」的登记");
+    if (delFile && !rel.empty()) {
+        std::string abs = joinRel(root, rel);
+        std::error_code ec;
+        if (fs::is_regular_file(fs::u8path(abs), ec)) {
+            fs::remove(fs::u8path(abs), ec);
+            if (!ec) r.notes.push_back("已删除文件 " + rel);
+            else     r.notes.push_back("警告：删除文件失败 " + rel);
+        } else {
+            r.notes.push_back("素材文件本就不存在，跳过：" + rel);
+        }
+    }
+    return r;
+}
+
+} // namespace
+
+ProjResult sbcliRemoveCostume(const std::string& project, const std::string& sprite,
+                              const std::string& name, bool delFile) {
+    return dropAsset(project, sprite, name, true, delFile);
+}
+
+ProjResult sbcliRemoveSound(const std::string& project, const std::string& sprite,
+                            const std::string& name, bool delFile) {
+    return dropAsset(project, sprite, name, false, delFile);
+}
+
+// 重命名造型/声音：改 meta 登记 + 所有 block.sbcli 里的引用。
+ProjResult sbcliRenameAsset(const std::string& project, const std::string& sprite,
+                            const std::string& oldName, const std::string& newName,
+                            bool isCostume) {
+    std::string root;
+    ProjResult err;
+    if (!requireRoot(project, root, err)) return err;
+    std::string dir;
+    ProjResult rs = sbcliResolveSprite(root, sprite, dir);
+    if (!rs.ok) return rs;
+    if (oldName.empty() || newName.empty()) return fail("旧名和新名都不能为空");
+    if (oldName == newName) return fail("新旧名字相同，无需重命名");
+
+    std::string metaPath = joinRel(dir, "meta.sbcli");
+    CharMeta cm = loadCharMeta(metaPath);
+    auto& table = isCostume ? cm.costumes : cm.sounds;
+    auto it = table.find(oldName);
+    if (it == table.end())
+        return fail(std::string(isCostume ? "造型" : "声音") + "「" + oldName + "」不存在");
+
+    std::string rel = it->second;
+    table.erase(it);
+    table[newName] = rel;
+    std::string spriteDisplay = cm.has("name") ? cm.get("name")
+                                               : norm(fs::path(dir).filename().u8string());
+    bool isStage = (norm(fs::path(dir).filename().u8string()) == "stage");
+    writeCharMeta(metaPath, cm, spriteDisplay, isStage);
+
+    ProjResult r;
+    r.ok = true;
+    r.created.push_back(relToRoot(root, metaPath));
+    r.notes.push_back(std::string("已重命名") + (isCostume ? "造型" : "声音") +
+                      "「" + oldName + "」→「" + newName + "」");
+    r.notes.push_back("提示：脚本里 looks_switchcostumeto COSTUME=... 的引用需用 "
+                      "`sb rename variable/list/broadcast` 之外的方式改，"
+                      "当前版本未自动改写造型引用 —— 用 `sb check` 检查后手工调整");
+    return r;
+}
+
+// 替换素材文件（保持名字，换内容）。
+ProjResult sbcliReplaceAsset(const std::string& project, const std::string& sprite,
+                             const std::string& name, const std::string& assetFile,
+                             bool isCostume) {
+    std::string root;
+    ProjResult err;
+    if (!requireRoot(project, root, err)) return err;
+    std::string dir;
+    ProjResult rs = sbcliResolveSprite(root, sprite, dir);
+    if (!rs.ok) return rs;
+    std::error_code ec;
+    if (!fs::is_regular_file(fs::u8path(assetFile), ec))
+        return fail("素材文件不存在：" + assetFile);
+
+    std::string metaPath = joinRel(dir, "meta.sbcli");
+    CharMeta cm = loadCharMeta(metaPath);
+    auto& table = isCostume ? cm.costumes : cm.sounds;
+    auto it = table.find(name);
+    if (it == table.end())
+        return fail(std::string(isCostume ? "造型" : "声音") + "「" + name + "」不存在");
+
+    std::string rel = it->second;
+    std::string dst = joinRel(root, rel);
+    if (!copyFileTo(assetFile, dst)) return fail("覆盖素材失败：" + rel);
+
+    ProjResult r;
+    r.ok = true;
+    r.created.push_back(rel);
+    r.notes.push_back(std::string("已替换") + (isCostume ? "造型" : "声音") +
+                      "「" + name + "」的内容 ← " + assetFile);
+    return r;
+}
+
 } // namespace sb

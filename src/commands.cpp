@@ -7,6 +7,8 @@
 #include "sbcli_fix.hpp"
 #include "sbcli_view.hpp"
 #include "sbcli_project.hpp"
+#include "sbcli_edit.hpp"
+#include "sbcli_merge.hpp"
 #include "sbcli_parser.hpp"
 #include "sbcli_meta.hpp"
 #include "sb3_internal.hpp"
@@ -1396,6 +1398,8 @@ int cmd_project(Args& a) {
         "init", "add-sprite", "add-costume", "add-sound",
         "add-variable", "add-list", "add-broadcast", "add-extension",
         "list-extensions", "remove-extension", "ext-info",
+        "remove-costume", "remove-sound", "rename-costume", "rename-sound",
+        "replace-costume", "replace-sound",
     };
     std::string sub;
     std::vector<std::string> rest;
@@ -1450,6 +1454,37 @@ int cmd_project(Args& a) {
     } else if (sub == "add-broadcast") {
         if (rest.empty()) { std::cerr << "用法：sb project add-broadcast <项目> <名字>\n"; return 2; }
         return show(sbcliAddBroadcast(proj, rest[0]));
+    } else if (sub == "remove-costume" || sub == "remove-sound") {
+        bool isCostume = (sub == "remove-costume");
+        if (rest.size() < 2) {
+            std::cerr << "用法：sb project " << sub << " <项目> <素材名> [角色] [--del-file]\n"
+                      << "  · 默认只取消 meta 登记，加 --del-file 同时删 assets/ 下的文件\n";
+            return 2;
+        }
+        std::string nm = rest[0];
+        std::string sp;
+        for (size_t k = 1; k < rest.size(); ++k)
+            if (rest[k] != "--del-file") sp = rest[k];
+        return show(isCostume ? sbcliRemoveCostume(proj, sp, nm, a.delFile)
+                              : sbcliRemoveSound(proj, sp, nm, a.delFile));
+    } else if (sub == "rename-costume" || sub == "rename-sound") {
+        bool isCostume = (sub == "rename-costume");
+        if (rest.size() < 2) {
+            std::cerr << "用法：sb project " << sub << " <项目> <旧名> <新名> [角色]\n";
+            return 2;
+        }
+        std::string oldName = rest[0], newName = rest[1];
+        std::string sp = rest.size() >= 3 ? rest[2] : "";
+        return show(sbcliRenameAsset(proj, sp, oldName, newName, isCostume));
+    } else if (sub == "replace-costume" || sub == "replace-sound") {
+        bool isCostume = (sub == "replace-costume");
+        if (rest.size() < 2) {
+            std::cerr << "用法：sb project " << sub << " <项目> <素材名> <新文件> [角色]\n";
+            return 2;
+        }
+        std::string nm = rest[0], file = rest[1];
+        std::string sp = rest.size() >= 3 ? rest[2] : "";
+        return show(sbcliReplaceAsset(proj, sp, nm, file, isCostume));
     } else if (sub == "add-extension") {
         if (rest.empty()) {
             std::cerr << "用法：sb project add-extension <项目> <扩展.js | URL>\n"
@@ -1617,6 +1652,132 @@ int cmd_unpack(Args& a) {
         std::cout << "  注意：有 " << r.unknownBlocks
                   << " 个未知积木（已原样保留，行前带 # 未知积木 注释）\n";
     std::cout << "\n下一步：sb check " << r.outDir << "  →  sb view " << r.outDir << "\n";
+    return 0;
+}
+
+
+// ==========================================================================
+// edit —— 脚本级编辑（P0）
+// 用法：
+//   sb edit <项目> [--sprite 角色] --script-index N --insert "积木文本" [--after K]
+//   sb edit <项目> [--sprite 角色] --script-index N --delete K
+//   sb edit <项目> [--sprite 角色] --script-index N --replace K "积木文本"
+//   sb edit <项目> [--sprite 角色] --drop-script N
+//   sb edit <项目> [--sprite 角色] --add-script "flag|broadcast 名" "积木行1\n积木行2"
+//   sb edit <项目> [--sprite 角色] --list          只看脚本清单（编辑前定位 index）
+// ==========================================================================
+
+static void printEditResult(const EditResult& r) {
+    if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return; }
+    for (const auto& n : r.notes) std::cout << "  " << n << "\n";
+    if (r.changed == 0) std::cout << "  （没有改动）\n";
+}
+
+int cmd_edit(Args& a) {
+    std::string proj = a.file;
+    if (proj.empty()) proj = a.path;
+    if (proj.empty()) {
+        std::cerr << "用法：sb edit <项目> [--sprite 角色] --script-index N <操作>\n"
+                     "  操作：--insert \"积木\" [--after K] / --delete K / --replace K \"积木\"\n"
+                     "        --drop-script N / --add-script \"hat\" \"body\" / --list\n";
+        return 2;
+    }
+
+    // 只看清单
+    if (a.editList) {
+        auto lines = sbcListScripts(proj, a.sprite);
+        if (lines.empty()) { std::cerr << "没有找到脚本（确认项目与角色）\n"; return 2; }
+        std::cout << "脚本清单（" << (a.sprite.empty() ? "默认角色" : a.sprite) << "）：\n";
+        for (auto& l : lines) std::cout << l << "\n";
+        return 0;
+    }
+
+    if (!a.editBody.empty() && !a.editHat.empty()) {
+        printEditResult(sbcEditAddScript(proj, a.sprite, a.editHat, a.editBody));
+        return 0;
+    }
+    if (a.editDropScript > 0) {
+        printEditResult(sbcEditDropScript(proj, a.sprite, a.editDropScript));
+        return 0;
+    }
+    if (a.editScript <= 0) {
+        std::cerr << "缺少 --script-index N（用 --list 先看脚本清单）\n";
+        return 2;
+    }
+    if (!a.editInsert.empty()) {
+        printEditResult(sbcEditInsert(proj, a.sprite, a.editScript,
+                                      a.editAfter < 0 ? 0 : a.editAfter, a.editInsert));
+        return 0;
+    }
+    // ⚠️ replace 必须在 delete 之前判断：两者共用 editDelete 字段
+    //（--block K 是"替换第 K 块"，--delete K 是"删第 K 块"）。
+    if (!a.editReplace.empty()) {
+        if (a.editDelete <= 0) { std::cerr << "--replace 需要配合 --block K 指定替换第几块\n"; return 2; }
+        printEditResult(sbcEditReplace(proj, a.sprite, a.editScript, a.editDelete, a.editReplace));
+        return 0;
+    }
+    if (a.editDelete > 0) {
+        printEditResult(sbcEditDelete(proj, a.sprite, a.editScript, a.editDelete));
+        return 0;
+    }
+    std::cerr << "没有指定操作（--insert / --delete / --replace / --drop-script / --add-script）\n";
+    return 2;
+}
+
+// ==========================================================================
+// rename —— 变量/列表/广播重命名（P2）
+// 用法：sb rename <项目> <variable|list|broadcast> <旧名> <新名>
+// ==========================================================================
+
+int cmd_rename(Args& a) {
+    std::string proj = a.file;
+    if (proj.empty() || a.extra.size() < 3) {
+        std::cerr << "用法：sb rename <项目> <variable|list|broadcast> <旧名> <新名>\n"
+                     "  会改写所有 block.sbcli 里的引用 + meta 声明\n"
+                     "  例：sb rename ./我的项目 variable 分数 得分\n";
+        return 2;
+    }
+    EditResult r = sbcRename(proj, a.extra[0], a.extra[1], a.extra[2]);
+    printEditResult(r);
+    return r.ok ? 0 : 2;
+}
+
+
+// ==========================================================================
+// merge —— 跨作品合并 / 导出角色（P1）
+// 用法：
+//   sb merge <目标项目> <源项目> [角色名]        合并（省略角色名=全部）
+//   sb merge --export <源项目> <角色名> <输出项目>  导出单个角色
+// ==========================================================================
+
+int cmd_merge(Args& a) {
+    // --export 模式：extra = [源项目, 角色名, 输出项目]
+    if (a.exportSprite) {
+        // 位置参数解析：第 1 个进 a.file，其余进 a.extra
+        if (a.file.empty() || a.extra.size() < 2) {
+            std::cerr << "用法：sb merge --export <源项目> <角色名> <输出项目目录>\n";
+            return 2;
+        }
+        MergeResult r = sbcExportSprite(a.file, a.extra[0], a.extra[1]);
+        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+        for (auto& n : r.notes) std::cout << "  " << n << "\n";
+        return 0;
+    }
+    // 合并模式：file=目标项目，extra[0]=源项目，extra[1]=角色（可选）
+    std::string dst = a.file.empty() ? a.path : a.file;
+    if (dst.empty() || a.extra.empty()) {
+        std::cerr << "用法：sb merge <目标项目> <源项目> [角色名]\n"
+                     "      sb merge --export <源项目> <角色名> <输出项目>\n"
+                     "  先用 sb unpack 把两个 .sb3 拆成项目目录再合并\n";
+        return 2;
+    }
+    std::string filter = a.extra.size() >= 2 ? a.extra[1] : "";
+    MergeResult r = sbcMergeProject(dst, a.extra[0], filter);
+    if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+    for (auto& n : r.notes) std::cout << "  " << n << "\n";
+    std::cout << "  合并完成：" << r.sprites << " 个角色";
+    if (r.renamed) std::cout << "（" << r.renamed << " 个因重名改名）";
+    std::cout << "\n";
     return 0;
 }
 

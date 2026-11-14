@@ -22,6 +22,18 @@ struct Args {
     int         depth = 3;
     int         jobs = 4;
     bool        json = false;
+    // ---- edit / rename 专用 ----
+    int         editScript = -1;      // --script N（1 起）
+    int         editAfter = 0;        // --after K（插入位置，0=最前）
+    int         editDelete = -1;      // --delete K / --block K（替换时复用）
+    int         editDropScript = -1;  // --drop-script N
+    bool        exportSprite = false;  // merge --export
+    bool        delFile = false;     // remove-costume/sound --del-file
+    bool        editList = false;     // --list
+    std::string editInsert;           // --insert "积木文本"
+    std::string editReplace;          // --replace K "积木文本"
+    std::string editHat;              // --add-script 的 hat
+    std::string editBody;             // --add-script 的 body
     bool        strings = false;
     bool        dialogOnly = false;
     bool        dropNumbers = false;   // text：过滤纯数字/符号串（数值噪音）
@@ -63,6 +75,9 @@ int cmd_fix    (Args& a);
 int cmd_view   (Args& a);
 int cmd_search (Args& a);   // sb search <关键词> 语法查找
 int cmd_project(Args& a);   // sb project init / add-*（单命令多子命令）
+int cmd_edit   (Args& a);   // sb edit <项目> --script N [--insert/--delete/--replace]
+int cmd_rename (Args& a);
+int cmd_merge  (Args& a);   // sb merge <目标项目> <源项目> [角色] / sb merge --export <源> <角色> <输出>   // sb rename <项目> variable|list|broadcast <旧名> <新名>
 int cmd_pack   (Args& a);   // sb pack <项目目录> <输出.sb3>
 int cmd_unpack (Args& a);   // sb unpack <作品.sb3> <输出目录>
 

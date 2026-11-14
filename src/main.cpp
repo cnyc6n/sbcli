@@ -41,7 +41,14 @@ static void printHelp() {
         "  search    语法查找手册：中文概念/英文 opcode → 模板+参数+示例\n"
         "            例：sb search 广播 / sb search looks_say --json\n"
         "  project   项目脚手架：init / add-sprite / add-costume / add-sound /\n"
-        "            add-variable / add-list / add-broadcast\n"
+        "            add-variable / add-list / add-broadcast / add-extension /\n"
+        "            remove-costume / rename-costume / replace-costume（声音同）\n"
+        "  edit      脚本级编辑：插入/删除/替换积木、加删脚本\n"
+        "            例：sb edit 项目 --list  然后  sb edit 项目 --script-index 1 --insert \"...\" --after 2\n"
+        "  rename    重命名变量/列表/广播（自动改写所有引用 + meta 声明）\n"
+        "            例：sb rename 项目 variable 分数 得分\n"
+        "  merge     跨作品合并角色 / 导出单个角色\n"
+        "            例：sb merge 目标项目 源项目 [角色名]   /   sb merge --export 源 角色 输出\n"
         "\n"
         "通用选项（可放在文件前后任意位置）：\n"
         "  --json    输出 JSON\n"
@@ -116,6 +123,17 @@ int main(int argc, char** argv) {
             else if (k == "--dry-run")    a.dryRun = true;
             else if (k == "--force" || k == "-f") a.force = true;
             else if (k == "--keep-file")  a.keepFile = true;
+            else if (k == "--del-file")   a.delFile = true;
+            else if (k == "--export")     a.exportSprite = true;
+            else if (k == "--script-index") { std::string v; nextVal(v); try { a.editScript = std::stoi(v); } catch (...) {} }
+            else if (k == "--after")  { std::string v; nextVal(v); try { a.editAfter = std::stoi(v); } catch (...) {} }
+            else if (k == "--delete") { std::string v; nextVal(v); try { a.editDelete = std::stoi(v); } catch (...) {} }
+            else if (k == "--block")  { std::string v; nextVal(v); try { a.editDelete = std::stoi(v); } catch (...) {} }
+            else if (k == "--drop-script") { std::string v; nextVal(v); try { a.editDropScript = std::stoi(v); } catch (...) {} }
+            else if (k == "--list")   a.editList = true;
+            else if (k == "--insert") { std::string v; nextVal(v); a.editInsert = v; }
+            else if (k == "--replace") { std::string v; nextVal(v); a.editReplace = v; }
+            else if (k == "--add-script") { std::string h, bd; nextVal(h); nextVal(bd); a.editHat = h; a.editBody = bd; }
             else if (k == "--info-table") a.infoTable = true;
             else if (k == "--script")     a.script = true;
             else if (k == "--limit") {
@@ -178,6 +196,9 @@ int main(int argc, char** argv) {
         else if (a.cmd == "view")    return cmd_view(a);
         else if (a.cmd == "search")  return cmd_search(a);
         else if (a.cmd == "project") return cmd_project(a);
+        else if (a.cmd == "edit")    return cmd_edit(a);
+        else if (a.cmd == "rename")  return cmd_rename(a);
+        else if (a.cmd == "merge")   return cmd_merge(a);
         else if (a.cmd == "pack")    return cmd_pack(a);
         else if (a.cmd == "unpack")  return cmd_unpack(a);
         else {

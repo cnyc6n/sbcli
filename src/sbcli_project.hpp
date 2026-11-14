@@ -41,6 +41,19 @@ ProjResult sbcliAddCostume(const std::string& project, const std::string& sprite
 ProjResult sbcliAddSound(const std::string& project, const std::string& sprite,
                          const std::string& assetFile, const std::string& soundName);
 
+// ---- 素材 删除 / 重命名 / 替换 ----
+// delFile=true 时同时删 assets/ 下的文件（默认 false 只取消登记）。
+ProjResult sbcliRemoveCostume(const std::string& project, const std::string& sprite,
+                              const std::string& name, bool delFile);
+ProjResult sbcliRemoveSound(const std::string& project, const std::string& sprite,
+                            const std::string& name, bool delFile);
+ProjResult sbcliRenameAsset(const std::string& project, const std::string& sprite,
+                            const std::string& oldName, const std::string& newName,
+                            bool isCostume);
+ProjResult sbcliReplaceAsset(const std::string& project, const std::string& sprite,
+                             const std::string& name, const std::string& assetFile,
+                             bool isCostume);
+
 // ---- sb add-variable / add-list / add-broadcast ----
 // scope 为空 → 根 meta；否则是角色 id 或角色名 → 角色 meta。
 // 广播只在根 meta（format.md §4.2：广播是全局的）。
