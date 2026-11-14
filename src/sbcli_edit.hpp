@@ -50,6 +50,31 @@ EditResult sbcEditAddScript(const std::string& project, const std::string& sprit
 EditResult sbcRename(const std::string& project, const std::string& kind,
                      const std::string& oldName, const std::string& newName);
 
+// ---------------------------------------------------------------- 子栈路径编辑
+
+// 路径语法："N" 或 "N.K" 或 "N.K.S"
+//   N = 脚本序号（1 起）
+//   K = 该层第几个块（1 起）
+//   S = 进入该块的子栈（0 = 第一个/那么分支，1 = else 分支）
+// 例："1.2.0.1" = 脚本1 → 第2块 → 第1个子栈 → 第1块
+struct EditPath {
+    int script = 0;
+    std::vector<std::pair<int,int>> steps;   // (块序号 1起, 子栈序号 0起)
+    bool ok = false;
+    std::string error;
+};
+EditPath sbcParseEditPath(const std::string& spec);
+
+// 在路径指向的**子栈内部**插入/删除/替换。
+// path 形如 "1.2.0"（脚本1 → 第2块的子栈0），新块插在该子栈末尾（或 after 指定位置）。
+EditResult sbcEditInsertAt(const std::string& project, const std::string& sprite,
+                           const std::string& path, const std::string& blockText,
+                           int afterBlock = -1);
+EditResult sbcEditDeleteAt(const std::string& project, const std::string& sprite,
+                           const std::string& path);
+EditResult sbcEditReplaceAt(const std::string& project, const std::string& sprite,
+                            const std::string& path, const std::string& blockText);
+
 // ---------------------------------------------------------------- 辅助
 
 // 列出某角色所有脚本的摘要（编辑前先看 index）。

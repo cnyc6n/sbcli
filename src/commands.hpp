@@ -30,6 +30,7 @@ struct Args {
     bool        exportSprite = false;  // merge --export
     bool        delFile = false;     // remove-costume/sound --del-file
     bool        editList = false;     // --list
+    std::string editPath;             // --path 1.2.0（子栈路径编辑）
     std::string editInsert;           // --insert "积木文本"
     std::string editReplace;          // --replace K "积木文本"
     std::string editHat;              // --add-script 的 hat

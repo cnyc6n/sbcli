@@ -1700,6 +1700,19 @@ int cmd_edit(Args& a) {
         printEditResult(sbcEditDropScript(proj, a.sprite, a.editDropScript));
         return 0;
     }
+    // 子栈路径模式（可定位到 if/else 内部）
+    if (!a.editPath.empty()) {
+        if (!a.editReplace.empty())
+            printEditResult(sbcEditReplaceAt(proj, a.sprite, a.editPath, a.editReplace));
+        else if (a.editDelete > 0)
+            printEditResult(sbcEditDeleteAt(proj, a.sprite, a.editPath));
+        else if (!a.editInsert.empty())
+            printEditResult(sbcEditInsertAt(proj, a.sprite, a.editPath, a.editInsert,
+                                            a.editAfter > 0 ? a.editAfter : -1));
+        else
+            std::cerr << "--path 需要配合 --insert / --delete K / --replace \"积木\"\n";
+        return 0;
+    }
     if (a.editScript <= 0) {
         std::cerr << "缺少 --script-index N（用 --list 先看脚本清单）\n";
         return 2;

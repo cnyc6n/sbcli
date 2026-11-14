@@ -198,6 +198,21 @@ MergeResult sbcMergeProject(const std::string& dstProject,
                     r.notes.push_back("列表「" + kv.first + "」与目标冲突，已改为角色私有「" + nn + "」");
                 }
             }
+            // 广播：同名广播在 Scratch 里就是同一个（全局），不需要改名。
+            // 但源项目的广播若在目标里**不存在**，要补登记，否则合并后的角色
+            // 发的广播没人收/没有声明（check 会报 undeclared-broadcast）。
+            {
+                std::map<std::string, std::string> dummy;
+                for (const auto& bc : srcRoot.broadcasts) {
+                    if (!dstRoot.broadcasts.count(bc)) {
+                        dstRoot.broadcasts.insert(bc);
+                        r.notes.push_back("补登记广播「" + bc + "」");
+                    }
+                }
+                if (!srcRoot.broadcasts.empty())
+                    meta::writeRootMeta(dst + "/meta.sbcli", dstRoot);
+            }
+
             if (!toLocal.empty()) {
                 // 把角色 meta 重新写一遍（带私有变量）
                 writeCharMeta(dstDir + "/meta.sbcli", cm, finalName, false);

@@ -342,6 +342,7 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
     };
     renameInMeta(root + "/meta.sbcli");
     // 角色级 meta：costume/sound 的登记在 CharMeta.costumes/sounds
+    std::string projectRootForAsset = root;
     auto renameInCharMeta = [&](const std::string& metaPath, bool /*unused*/) {
         if (!fs::exists(fs::u8path(metaPath), ec)) return;
         if (kind != "costume" && kind != "sound") return;
@@ -351,6 +352,25 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
         if (it == table.end()) return;
         std::string rel = it->second;
         table.erase(it);
+        // 同步改 assets/ 下的文件名：<旧名>.<ext> → <新名>.<ext>
+        // （否则文件名与登记名脱节，用户看 assets/ 会困惑）
+        {
+            std::error_code ec2;
+            fs::path rp = fs::u8path(rel);
+            std::string stem = rp.stem().u8string();
+            if (stem == oldName) {
+                fs::path np = rp.parent_path() / (newName + rp.extension().u8string());
+                std::string npRel = meta::norm(np.u8string());
+                std::string absOld = projectRootForAsset;
+                absOld += "/" + rel;
+                std::string absNew = projectRootForAsset + "/" + np.u8string();
+                if (fs::exists(fs::u8path(absOld), ec2) &&
+                    !fs::exists(fs::u8path(absNew), ec2)) {
+                    fs::rename(fs::u8path(absOld), fs::u8path(absNew), ec2);
+                    if (!ec2) rel = npRel;
+                }
+            }
+        }
         table[newName] = rel;
         std::string disp = cm.has("name") ? cm.get("name")
                                           : meta::norm(fs::path(metaPath).parent_path().filename().u8string());
@@ -369,8 +389,10 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
     r.changed = total;
     r.notes.push_back("已重命名 " + kind + "：「" + oldName + "」→「" + newName +
                       "」，改写 " + std::to_string(total) + " 处引用");
-    if (total == 0)
+    if (total == 0 && (kind == "variable" || kind == "list" || kind == "broadcast"))
         r.notes.push_back("警告：没有找到任何引用，请确认名字拼写（可用 sb refs 查）");
+    if (total == 0 && (kind == "costume" || kind == "sound"))
+        r.notes.push_back("提示：脚本里没有引用这个素材（只改了登记名与文件名）");
     return r;
 }
 
@@ -395,6 +417,178 @@ std::vector<std::string> sbcListScripts(const std::string& project,
                       "   [" + std::to_string(s.blocks.size()) + " 块]  首块: " + first);
     }
     return out;
+}
+
+
+// ---------------------------------------------------------------- 子栈路径编辑
+
+EditPath sbcParseEditPath(const std::string& spec) {
+    EditPath p;
+    if (spec.empty()) { p.error = "路径为空"; return p; }
+    std::vector<int> nums;
+    size_t i = 0;
+    while (i < spec.size()) {
+        while (i < spec.size() && (spec[i] == ' ')) ++i;
+        size_t j = i;
+        while (j < spec.size() && spec[j] != '.') ++j;
+        std::string part = spec.substr(i, j - i);
+        if (part.empty()) { p.error = "路径有空段：" + spec; return p; }
+        try { nums.push_back(std::stoi(part)); }
+        catch (...) { p.error = "路径段不是数字：" + part; return p; }
+        i = (j < spec.size()) ? j + 1 : j;
+    }
+    if (nums.empty()) { p.error = "路径为空"; return p; }
+    p.script = nums[0];
+    // 后续按 (块, 子栈) 成对解析
+    size_t k = 1;
+    while (k + 1 < nums.size()) {
+        p.steps.push_back({ nums[k], nums[k + 1] });
+        k += 2;
+    }
+    // 末尾单个数字 = 最后一级的块序号，子栈用 0（约定：直接指定块时进入它的第 0 子栈）
+    if (k < nums.size()) p.steps.push_back({ nums[k], 0 });
+    p.ok = true;
+    return p;
+}
+
+namespace {
+
+// 按路径找到「叶子块」以及它所在的子栈（返回子栈指针）。
+// 返回 null 表示路径中间层不存在。
+std::vector<SbcBlock>* resolveSubstack(SbcFile& f, const EditPath& path,
+                                       std::string& err) {
+    if (path.script < 1 || (size_t)path.script > f.scripts.size()) {
+        err = "脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本";
+        return nullptr;
+    }
+    std::vector<SbcBlock>* cur = &f.scripts[(size_t)path.script - 1].blocks;
+    for (size_t si = 0; si < path.steps.size(); ++si) {
+        int blockIdx = path.steps[si].first;
+        int subIdx   = path.steps[si].second;
+        if (blockIdx < 1 || (size_t)blockIdx > cur->size()) {
+            err = "第 " + std::to_string(si + 1) + " 层块序号越界（该层有 " +
+                  std::to_string(cur->size()) + " 个块）";
+            return nullptr;
+        }
+        SbcBlock& blk = (*cur)[(size_t)blockIdx - 1];
+        if (subIdx < 0 || (size_t)subIdx >= blk.substacks.size()) {
+            err = "块「" + blk.opcode + "」没有第 " + std::to_string(subIdx) +
+                  " 个子栈（它有 " + std::to_string(blk.substacks.size()) + " 个）";
+            return nullptr;
+        }
+        cur = &blk.substacks[(size_t)subIdx];
+    }
+    return cur;
+}
+
+} // namespace
+
+EditResult sbcEditInsertAt(const std::string& project, const std::string& sprite,
+                           const std::string& path, const std::string& blockText,
+                           int afterBlock) {
+    std::string root = meta::findProjectRoot(project);
+    if (root.empty()) return fail("找不到项目根目录：" + project);
+    std::string dir = resolveSpriteDir(root, sprite);
+    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+
+    EditPath ep = sbcParseEditPath(path);
+    if (!ep.ok) return fail("路径无效：" + ep.error);
+
+    SbcBlock nb;
+    std::string perr;
+    if (!parseOneBlock(blockText, nb, perr)) return fail("积木文本解析失败：" + perr);
+
+    return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
+        std::string err;
+        std::vector<SbcBlock>* sub = resolveSubstack(f, ep, err);
+        if (!sub) return fail(err);
+        int pos = (afterBlock < 0) ? (int)sub->size() : afterBlock;
+        if (pos < 0 || (size_t)pos > sub->size())
+            return fail("插入位置越界：该子栈有 " + std::to_string(sub->size()) + " 个块");
+        sub->insert(sub->begin() + pos, nb);
+        EditResult r;
+        r.changed = 1;
+        r.notes.push_back("已在子栈 " + path + " 的第 " + std::to_string(pos) +
+                          " 位置插入：" + blockText);
+        return r;
+    });
+}
+
+EditResult sbcEditDeleteAt(const std::string& project, const std::string& sprite,
+                           const std::string& path) {
+    std::string root = meta::findProjectRoot(project);
+    if (root.empty()) return fail("找不到项目根目录：" + project);
+    std::string dir = resolveSpriteDir(root, sprite);
+    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+
+    // 删除需要"父容器 + 索引"：把最后一段拆出来
+    EditPath ep = sbcParseEditPath(path);
+    if (!ep.ok) return fail("路径无效：" + ep.error);
+    if (ep.steps.empty()) return fail("删除需要定位到具体块（如 1.2 或 1.2.0.3）");
+    auto last = ep.steps.back();
+    ep.steps.pop_back();
+
+    return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
+        std::string err;
+        std::vector<SbcBlock>* container = nullptr;
+        if (ep.steps.empty()) {
+            if (ep.script < 1 || (size_t)ep.script > f.scripts.size())
+                return fail("脚本序号越界");
+            container = &f.scripts[(size_t)ep.script - 1].blocks;
+        } else {
+            container = resolveSubstack(f, ep, err);
+            if (!container) return fail(err);
+        }
+        int idx = last.first;
+        if (idx < 1 || (size_t)idx > container->size())
+            return fail("块序号越界：该层有 " + std::to_string(container->size()) + " 个块");
+        std::string op = (*container)[(size_t)idx - 1].opcode;
+        container->erase(container->begin() + (idx - 1));
+        EditResult r;
+        r.changed = 1;
+        r.notes.push_back("已删除 " + path + " 处的块（" + op + "）");
+        return r;
+    });
+}
+
+EditResult sbcEditReplaceAt(const std::string& project, const std::string& sprite,
+                            const std::string& path, const std::string& blockText) {
+    std::string root = meta::findProjectRoot(project);
+    if (root.empty()) return fail("找不到项目根目录：" + project);
+    std::string dir = resolveSpriteDir(root, sprite);
+    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+
+    EditPath ep = sbcParseEditPath(path);
+    if (!ep.ok) return fail("路径无效：" + ep.error);
+    if (ep.steps.empty()) return fail("替换需要定位到具体块（如 1.2 或 1.2.0.3）");
+    auto last = ep.steps.back();
+    ep.steps.pop_back();
+
+    SbcBlock nb;
+    std::string perr;
+    if (!parseOneBlock(blockText, nb, perr)) return fail("积木文本解析失败：" + perr);
+
+    return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
+        std::string err;
+        std::vector<SbcBlock>* container = nullptr;
+        if (ep.steps.empty()) {
+            if (ep.script < 1 || (size_t)ep.script > f.scripts.size())
+                return fail("脚本序号越界");
+            container = &f.scripts[(size_t)ep.script - 1].blocks;
+        } else {
+            container = resolveSubstack(f, ep, err);
+            if (!container) return fail(err);
+        }
+        int idx = last.first;
+        if (idx < 1 || (size_t)idx > container->size())
+            return fail("块序号越界：该层有 " + std::to_string(container->size()) + " 个块");
+        std::string oldOp = (*container)[(size_t)idx - 1].opcode;
+        (*container)[(size_t)idx - 1] = nb;
+        EditResult r;
+        r.changed = 1;
+        r.notes.push_back("已替换 " + path + " 处的块（" + oldOp + " → " + nb.opcode + "）");
+        return r;
+    });
 }
 
 } // namespace sb

@@ -131,6 +131,7 @@ int main(int argc, char** argv) {
             else if (k == "--block")  { std::string v; nextVal(v); try { a.editDelete = std::stoi(v); } catch (...) {} }
             else if (k == "--drop-script") { std::string v; nextVal(v); try { a.editDropScript = std::stoi(v); } catch (...) {} }
             else if (k == "--list")   a.editList = true;
+            else if (k == "--path")   { std::string v; nextVal(v); a.editPath = v; }
             else if (k == "--insert") { std::string v; nextVal(v); a.editInsert = v; }
             else if (k == "--replace") { std::string v; nextVal(v); a.editReplace = v; }
             else if (k == "--add-script") { std::string h, bd; nextVal(h); nextVal(bd); a.editHat = h; a.editBody = bd; }
