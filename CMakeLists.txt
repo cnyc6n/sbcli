@@ -31,6 +31,7 @@ add_executable(sb
     src/sbcli_view.cpp
     src/sbcli_edit.cpp
     src/sbcli_merge.cpp
+    src/sbcli_mcp.cpp
     src/sbcli_project.cpp
     src/sbcli_search.cpp
     src/sbcli_pack.cpp
@@ -173,5 +174,60 @@ if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_extension.cpp)
     )
     if (WIN32)
         target_compile_definitions(sb_extension_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# MCP server 测试（协议握手 / 错误处理 / 8 工具清单 / 真跑 5 个工具）
+#
+# 直接调 mcpHandleLine（字符串进、字符串出），不造子进程。
+# 链接的源码 = 主程序 sb 的全部源码（去掉 main.cpp）：sbcli_mcp.cpp 为了让
+# sb_info / sb_script / sb_pack 走真实命令实现，会引用 commands.cpp；
+# 而 commands.cpp 又拖进 sb1/sb3 全部命令模块，所以这里必须整份链接，
+# 不能用桩函数（桩会让测试"看起来通过"但实际路径没被跑到）。
+# ---------------------------------------------------------------------------
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mcp.cpp)
+    add_executable(sb_mcp_test
+        tests/test_mcp.cpp
+        src/jdoc.cpp
+        src/sapi.cpp
+        third_party/simdjson.cpp
+        src/miniz_impl.cpp
+        src/common.cpp
+        src/squeak.cpp
+        src/squeak_tables.cpp
+        src/sb1_data.cpp
+        src/sb1_image.cpp
+        src/sb1_cmds.cpp
+        src/sb2.cpp
+        src/sb3_load.cpp
+        src/sb3_render.cpp
+        src/sb3_helpers.cpp
+        src/ext_loader.cpp
+        src/sb3_cmds.cpp
+        src/sb3_graph.cpp
+        src/sb3_diff.cpp
+        src/commands.cpp
+        src/find_impl.cpp
+        src/sbcli_parser.cpp
+        src/sbcli_check.cpp
+        src/sbcli_fix.cpp
+        src/sbcli_view.cpp
+        src/sbcli_edit.cpp
+        src/sbcli_merge.cpp
+        src/sbcli_mcp.cpp
+        src/sbcli_project.cpp
+        src/sbcli_search.cpp
+        src/sbcli_pack.cpp
+        src/sbcli_unpack.cpp
+    )
+    target_include_directories(sb_mcp_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(sb_mcp_test PRIVATE
+        SBCLI_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if (WIN32)
+        target_compile_definitions(sb_mcp_test PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()

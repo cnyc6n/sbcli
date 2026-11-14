@@ -10,6 +10,22 @@ namespace sb {
 
 inline constexpr const char* VERSION = "1.3.0";
 
+// ---- 统一退出码 ----
+// 0 成功 / 1 通用失败 / 2 用法错误 / 3 输入无效 / 4 校验失败 /
+// 5 编辑冲突 / 6 依赖缺失 / 7 权限或 IO
+//
+// 约定：命令入口（cmd_*）与 main() 返回 int，一律用本枚举具名常量，
+// 不再写裸数字。详见 docs/exit-codes.md。
+enum class ExitCode : int {
+    Ok = 0, Fail = 1, Usage = 2, BadInput = 3,
+    CheckFailed = 4, Conflict = 5, DepMissing = 6, IoError = 7
+};
+
+// 转 int（命令返回类型是 int，避免每个 return 都写 (int)ExitCode::X 强转）。
+// 名字取 exitInt 而非 ec：各命令里大量存在局部变量 std::error_code ec，
+// 再引入同名函数会命中「局部变量遮蔽」导致调用处报错。
+inline constexpr int exitInt(ExitCode c) noexcept { return static_cast<int>(c); }
+
 class Sb1Error : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;

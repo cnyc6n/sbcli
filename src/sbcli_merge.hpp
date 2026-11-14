@@ -12,6 +12,8 @@ namespace sb {
 struct MergeResult {
     bool        ok = true;
     std::string error;
+    std::string code;                 // 稳定错误码（仅 ok=false 时有意义）：
+                                      //   E_NO_PROJECT / E_NO_SPRITE / E_IO
     int         sprites = 0;          // 合并/导出的角色数
     int         renamed = 0;          // 因重名而改名的次数
     std::vector<std::string> notes;

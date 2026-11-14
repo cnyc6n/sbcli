@@ -16,6 +16,9 @@ namespace sb {
 struct EditResult {
     bool        ok = true;
     std::string error;
+    std::string code;                 // 稳定错误码（仅 ok=false 时有意义）：
+                                      //   E_NO_PROJECT / E_NO_SPRITE / E_BAD_PATH /
+                                      //   E_OUT_OF_RANGE / E_PARSE / E_STRUCT / E_IO
     std::vector<std::string> notes;   // 编辑摘要
     int         changed = 0;          // 改动的块数/行数
 };
@@ -76,6 +79,25 @@ EditResult sbcEditReplaceAt(const std::string& project, const std::string& sprit
                             const std::string& path, const std::string& blockText);
 
 // ---------------------------------------------------------------- 辅助
+
+// 脚本清单的结构化表示（--list --json 用；sbcListScripts 也基于它格式化）
+struct ScriptInfo {
+    int         index = 0;        // 脚本序号（1 起，供 --script-index 用）
+    std::string hat;              // 帽子类型，如 flag / broadcast / key
+    std::string hatArg;           // 帽子的参数（广播名 / 按键名），可为空
+    int         blockCount = 0;   // 顶层块数
+    std::string firstOpcode;      // 首块 opcode；空脚本为空串
+};
+
+// 列出某角色所有脚本的结构化摘要。
+// 项目根/角色无效时返回空 vector（要看具体原因请用 sbcScriptInfosEx）。
+std::vector<ScriptInfo> sbcScriptInfos(const std::string& project,
+                                       const std::string& sprite);
+
+// 同上，但失败时通过 err/code 说明原因（E_NO_PROJECT / E_NO_SPRITE / E_IO）。
+std::vector<ScriptInfo> sbcScriptInfosEx(const std::string& project,
+                                         const std::string& sprite,
+                                         std::string& err, std::string& code);
 
 // 列出某角色所有脚本的摘要（编辑前先看 index）。
 // 复用 cmd_view 的渲染，返回每脚本的首行描述。

@@ -152,7 +152,7 @@ int cmd_info(Args& a) {
     if (meta.ok()) info["meta"] = toJson(meta);
     else           info["meta"] = json::object();
 
-    if (a.json) { printJson(info); return 0; }
+    if (a.json) { printJson(info); return exitInt(ExitCode::Ok); }
 
     std::cout << "文件：" << jsonStr(info["file"]) << "  （"
               << humanSize(info["size"].get<long long>()) << "，" << sf.kind << "）\n";
@@ -184,7 +184,7 @@ int cmd_info(Args& a) {
         }
         std::cout << "\n";
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 int cmd_sprites(Args& a) {
@@ -209,7 +209,7 @@ int cmd_text(Args& a) {
 // script：项目目录 → 与 sb script 相同风格的中文脚本输出
 static int sbcliCmdScript(Args& a) {
     ViewReport r = sbcliView(a.file);
-    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return exitInt(ExitCode::Usage); }
     std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
     for (const auto& sp : r.sprites) {
         if (!a.sprite.empty() && sp.id != a.sprite && sp.name != a.sprite) continue;
@@ -225,13 +225,13 @@ static int sbcliCmdScript(Args& a) {
             }
         }
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // sprites：项目目录 → 角色清单（与 sb sprites 风格一致）
 static int sbcliCmdSprites(Args& a) {
     ViewReport r = sbcliView(a.file);
-    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return exitInt(ExitCode::Usage); }
     int nSprite = 0, nStage = 0;
     for (const auto& sp : r.sprites) (sp.isStage ? nStage : nSprite)++;
     std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
@@ -242,13 +242,13 @@ static int sbcliCmdSprites(Args& a) {
         std::cout << "       脚本 " << sp.scriptCount << " · 积木 " << sp.blockCount
                   << " · 造型 " << sp.costumeCount << " · 声音 " << sp.soundCount << "\n";
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // info：项目目录概要
 static int sbcliCmdInfo(Args& a) {
     ViewReport r = sbcliView(a.file);
-    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+    if (!r.error.empty()) { std::cerr << "错误：" << r.error << "\n"; return exitInt(ExitCode::Usage); }
     int nSprite = 0, nStage = 0, nScript = 0, nBlock = 0, nCostume = 0, nSound = 0;
     for (const auto& sp : r.sprites) {
         (sp.isStage ? nStage : nSprite)++;
@@ -267,14 +267,14 @@ static int sbcliCmdInfo(Args& a) {
         out["costumeCount"] = nCostume;
         out["soundCount"] = nSound;
         sb3JsonOut(out);
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
     std::cout << "文件：" << basename(a.file) << "  （sbcli 项目）\n";
     if (!r.projectName.empty()) std::cout << "项目名：" << r.projectName << "\n";
     std::cout << "角色 " << nSprite << " 个 + 舞台 " << nStage << " 个\n";
     std::cout << "脚本 " << nScript << " · 积木 " << nBlock
               << " · 造型 " << nCostume << " · 声音 " << nSound << "\n";
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 int cmd_script(Args& a) {
@@ -287,7 +287,7 @@ int cmd_script(Args& a) {
 // vars：项目目录 → 从根 meta 与各角色 meta 读变量/列表
 static int sbcliCmdVars(Args& a) {
     std::string root = sb::meta::findProjectRoot(a.file);
-    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return exitInt(ExitCode::Usage); }
     auto load = [&](const std::string& p) { return sb::meta::loadCharMeta(p + "/meta.sbcli"); };
     sb::meta::CharMeta rm = load(root);
     std::vector<std::string> chars;
@@ -321,7 +321,7 @@ static int sbcliCmdVars(Args& a) {
         }
         out["sprites"] = sprites;
         sb3JsonOut(out);
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
     std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
     auto dumpOne = [&](const std::string& where, const sb::meta::CharMeta& m) {
@@ -336,7 +336,7 @@ static int sbcliCmdVars(Args& a) {
         std::string nm = m.has("name") ? m.get("name") : id;
         dumpOne((id == "stage" ? std::string("舞台") : "角色 " + id + "（" + nm + "）"), m);
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 int cmd_vars(Args& a) {
@@ -362,7 +362,7 @@ int cmd_blocks(Args& a) {
     if (fmt == "sbcli") return sbcliCmdBlocks(a);
     if (fmt == "sb1") {
         std::cerr << "提示：Scratch 1.4 的脚本不是块字典结构，暂不支持统计。\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
     return s3_cmd_blocks(a);
 }
@@ -379,7 +379,7 @@ int cmd_json(Args& a) {
     std::string fmt = detectFormat(a.file);
     if (fmt == "sb1") {
         std::cerr << "提示：Scratch 1.4 没有 project.json，使用 `sb raw` 查看对象树。\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
     return s3_cmd_json(a);
 }
@@ -405,7 +405,7 @@ int cmd_diff(Args& a) {
     if (fmt == "sb1") {
         std::cerr << "提示：diff 版本对比目前支持 Scratch 2/3（.sb3/.sb2），"
                   << "Scratch 1.4 暂未实现。\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
     return s3_cmd_diff(a);
 }
@@ -415,7 +415,7 @@ int cmd_dup(Args& a) {
     if (fmt == "sb1") {
         std::cerr << "提示：dup 相似角色检测目前支持 Scratch 2/3（.sb3/.sb2），"
                   << "Scratch 1.4 暂未实现。\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
     return s3_cmd_dup(a);
 }
@@ -432,7 +432,7 @@ int cmd_check(Args& a) {
     CheckReport r = sbcliCheck(target);
     if (!r.error.empty()) {
         std::cerr << "错误：" << r.error << "\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 
     // 按 文件 → 行号 排序输出
@@ -479,14 +479,14 @@ int cmd_check(Args& a) {
     std::cout << "检查项目：" << r.root << "\n";
     if (r.files.empty()) {
         std::cout << "（没有可检查的 block.sbcli）\n";
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
     std::cout << "已检查 " << r.files.size() << " 个脚本文件"
               << (r.rootMetaFound ? "" : "（未找到根 meta.sbcli）") << "\n\n";
 
     if (r.diags.empty()) {
         std::cout << "没有发现问题。\n";
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
 
     std::string curFile;
@@ -528,7 +528,7 @@ int cmd_fix(Args& a) {
     FixReport r = sbcliFix(target, a.dryRun);
     if (!r.error.empty()) {
         std::cerr << "错误：" << r.error << "\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 
     std::stable_sort(r.notes.begin(), r.notes.end(),
@@ -568,7 +568,7 @@ int cmd_fix(Args& a) {
     std::cout << "修复项目：" << r.root << (r.dryRun ? "（--dry-run，不写文件）" : "") << "\n";
     if (r.files.empty()) {
         std::cout << "（没有可处理的 block.sbcli）\n";
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
     std::cout << "扫描 " << r.files.size() << " 个脚本文件\n";
 
@@ -649,7 +649,7 @@ int cmd_ls(Args& a) {
 
     if (files.empty()) {
         std::cerr << "这里没有找到 .sb / .sprite / .sb3 / .sb2 / .sprite3 文件\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 
     json rows = json::array();
@@ -698,7 +698,7 @@ int cmd_ls(Args& a) {
         });
     }
 
-    if (a.json) { printJson(rows); return 0; }
+    if (a.json) { printJson(rows); return exitInt(ExitCode::Ok); }
 
     std::cout << "目录：" << a.path << "\n";
     std::cout << "共 " << rows.size() << " 个作品\n\n";
@@ -736,7 +736,7 @@ int cmd_ls(Args& a) {
     std::cout << std::string(82, '-') << "\n";
     std::cout << "合计：" << ok << " 个可读作品，" << totBlocks
               << " 块积木（仅 Scratch 2/3），" << totSprites << " 个角色\n";
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 int cmd_find(Args& a) {
@@ -855,7 +855,7 @@ int cmd_find(Args& a) {
             out["hits"].push_back(std::move(j));
         }
         printJson(out);
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
 
     std::cout << "搜索「" << a.keyword << "」，命中 " << hits.size() << " 处\n\n";
@@ -874,7 +874,7 @@ int cmd_find(Args& a) {
     if (hits.size() > (size_t)a.limit)
         std::cout << "\n…还有 " << (hits.size() - (size_t)a.limit)
                   << " 处（--limit 调整）\n";
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // ==========================================================================
@@ -889,7 +889,7 @@ int cmd_view(Args& a) {
     ViewReport r = sbcliView(target);
     if (!r.error.empty()) {
         std::cerr << "错误：" << r.error << "\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 
     // --sprite 过滤：按 id 或名字
@@ -901,7 +901,7 @@ int cmd_view(Args& a) {
             if (s->id == a.sprite || s->name == a.sprite) keep.push_back(s);
         if (keep.empty()) {
             std::cerr << "错误：没有找到角色「" << a.sprite << "」\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         list = keep;
     }
@@ -945,7 +945,7 @@ int cmd_view(Args& a) {
         }
         out["sprites"] = std::move(arr);
         std::cout << out.dump(2) << "\n";
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
 
     // 文本模式
@@ -954,7 +954,7 @@ int cmd_view(Args& a) {
     std::cout << "\n";
     if (r.sprites.empty()) {
         std::cout << "（没有找到角色目录）\n";
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
 
     std::cout << "\n角色 " << list.size() << " 个：\n";
@@ -988,7 +988,7 @@ int cmd_view(Args& a) {
             }
         }
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // ==========================================================================
@@ -1065,7 +1065,7 @@ void collectSbcRefs(const SbcBlock& b, std::map<std::string, std::vector<ProjOp>
 static int sbcliCmdRefs(Args& a) {
     // 项目目录 → 角色列表（复用 sbcliView 找到 character/ 下的目录）
     std::string root = sb::meta::findProjectRoot(a.file);
-    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return exitInt(ExitCode::Usage); }
 
     // 名字 → 角色 → 操作
     struct RefEntry { int script; std::string action; std::string text; };
@@ -1168,7 +1168,7 @@ static int sbcliCmdRefs(Args& a) {
                               << " " << e.action << "\n";
         }
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // ==========================================================================
@@ -1177,7 +1177,7 @@ static int sbcliCmdRefs(Args& a) {
 
 static int sbcliCmdEvents(Args& a) {
     std::string root = sb::meta::findProjectRoot(a.file);
-    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return exitInt(ExitCode::Usage); }
 
     // 广播名 → (发送者/接收者: 角色·脚本)
     struct Ev { std::string who; int script; };
@@ -1238,7 +1238,7 @@ static int sbcliCmdEvents(Args& a) {
     std::set<std::string> allB;
     for (auto& kv : senders) allB.insert(kv.first);
     for (auto& kv : receivers) allB.insert(kv.first);
-    if (allB.empty()) { std::cout << "这个作品没有广播。\n"; return 0; }
+    if (allB.empty()) { std::cout << "这个作品没有广播。\n"; return exitInt(ExitCode::Ok); }
     for (auto& bname : allB) {
         std::cout << "\n■ " << bname;
         bool hasS = senders.count(bname) && !senders[bname].empty();
@@ -1267,7 +1267,7 @@ static int sbcliCmdEvents(Args& a) {
             std::cout << "\n";
         }
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // ==========================================================================
@@ -1276,7 +1276,7 @@ static int sbcliCmdEvents(Args& a) {
 
 static int sbcliCmdText(Args& a) {
     std::string root = sb::meta::findProjectRoot(a.file);
-    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return exitInt(ExitCode::Usage); }
 
     std::vector<std::string> texts;
     std::error_code ec;
@@ -1319,10 +1319,10 @@ static int sbcliCmdText(Args& a) {
         for (auto& s : texts) arr.push_back(s);
         out["texts"] = arr;
         sb3JsonOut(out);
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
     for (auto& s : texts) std::cout << s << "\n";
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // ==========================================================================
@@ -1331,7 +1331,7 @@ static int sbcliCmdText(Args& a) {
 
 static int sbcliCmdBlocks(Args& a) {
     std::string root = sb::meta::findProjectRoot(a.file);
-    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return 2; }
+    if (root.empty()) { std::cerr << "错误：不是 sbcli 项目目录：" << a.file << "\n"; return exitInt(ExitCode::Usage); }
 
     std::map<std::string, long long> opCount;
     std::error_code ec;
@@ -1364,7 +1364,7 @@ static int sbcliCmdBlocks(Args& a) {
         for (auto& kv : opCount) ops[kv.first] = kv.second;
         out["opcodes"] = ops;
         sb3JsonOut(out);
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
     std::cout << "文件：" << basename(a.file) << "（sbcli 项目）\n";
     std::cout << "共 " << total << " 个积木、" << opCount.size() << " 种 opcode\n";
@@ -1381,7 +1381,7 @@ static int sbcliCmdBlocks(Args& a) {
         std::cout << "  " << kv.second << " ×" << kv.first << "\n";
         if (a.limitSet && ++shown >= a.limit) break;
     }
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 // ==========================================================================
@@ -1421,45 +1421,45 @@ int cmd_project(Args& a) {
                      "子命令：init / add-sprite / add-costume / add-sound /\n"
                      "        add-variable / add-list / add-broadcast / add-extension /\n"
                      "        list-extensions / remove-extension / ext-info\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 
     auto show = [](const ProjResult& r) {
-        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return exitInt(ExitCode::Usage); }
         for (auto& c : r.created) std::cout << "  ✓ " << c << "\n";
         for (auto& n : r.notes)   std::cout << "  · " << n << "\n";
-        return 0;
+        return exitInt(ExitCode::Ok);
     };
 
     if (sub == "init") {
         return show(sbcliProjectInit(proj, rest.empty() ? "" : rest[0]));
     } else if (sub == "add-sprite") {
-        if (rest.empty()) { std::cerr << "用法：sb project add-sprite <项目> <名字>\n"; return 2; }
+        if (rest.empty()) { std::cerr << "用法：sb project add-sprite <项目> <名字>\n"; return exitInt(ExitCode::Usage); }
         return show(sbcliAddSprite(proj, rest[0]));
     } else if (sub == "add-costume") {
-        if (rest.size() < 3) { std::cerr << "用法：sb project add-costume <项目> <角色> <素材文件> <造型名>\n"; return 2; }
+        if (rest.size() < 3) { std::cerr << "用法：sb project add-costume <项目> <角色> <素材文件> <造型名>\n"; return exitInt(ExitCode::Usage); }
         return show(sbcliAddCostume(proj, rest[0], rest[1], rest[2]));
     } else if (sub == "add-sound") {
-        if (rest.size() < 3) { std::cerr << "用法：sb project add-sound <项目> <角色> <素材文件> <声音名>\n"; return 2; }
+        if (rest.size() < 3) { std::cerr << "用法：sb project add-sound <项目> <角色> <素材文件> <声音名>\n"; return exitInt(ExitCode::Usage); }
         return show(sbcliAddSound(proj, rest[0], rest[1], rest[2]));
     } else if (sub == "add-variable") {
-        if (rest.size() < 2) { std::cerr << "用法：sb project add-variable <项目> <名字> <初值> [角色]\n"; return 2; }
+        if (rest.size() < 2) { std::cerr << "用法：sb project add-variable <项目> <名字> <初值> [角色]\n"; return exitInt(ExitCode::Usage); }
         return show(sbcliAddVariable(proj, rest[0], rest[1], rest.size() > 2 ? rest[2] : ""));
     } else if (sub == "add-list") {
-        if (rest.size() < 2) { std::cerr << "用法：sb project add-list <项目> <名字> <元素...> [角色]\n"; return 2; }
+        if (rest.size() < 2) { std::cerr << "用法：sb project add-list <项目> <名字> <元素...> [角色]\n"; return exitInt(ExitCode::Usage); }
         std::string items = rest[1];
         for (size_t i = 2; i + 1 < rest.size(); ++i) items += " " + rest[i];
         std::string scope = rest.size() >= 3 ? rest[rest.size() - 1] : "";
         return show(sbcliAddList(proj, rest[0], items, scope));
     } else if (sub == "add-broadcast") {
-        if (rest.empty()) { std::cerr << "用法：sb project add-broadcast <项目> <名字>\n"; return 2; }
+        if (rest.empty()) { std::cerr << "用法：sb project add-broadcast <项目> <名字>\n"; return exitInt(ExitCode::Usage); }
         return show(sbcliAddBroadcast(proj, rest[0]));
     } else if (sub == "remove-costume" || sub == "remove-sound") {
         bool isCostume = (sub == "remove-costume");
         if (rest.size() < 2) {
             std::cerr << "用法：sb project " << sub << " <项目> <素材名> [角色] [--del-file]\n"
                       << "  · 默认只取消 meta 登记，加 --del-file 同时删 assets/ 下的文件\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         std::string nm = rest[0];
         std::string sp;
@@ -1471,7 +1471,7 @@ int cmd_project(Args& a) {
         bool isCostume = (sub == "rename-costume");
         if (rest.size() < 2) {
             std::cerr << "用法：sb project " << sub << " <项目> <旧名> <新名> [角色]\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         std::string oldName = rest[0], newName = rest[1];
         std::string sp = rest.size() >= 3 ? rest[2] : "";
@@ -1480,7 +1480,7 @@ int cmd_project(Args& a) {
         bool isCostume = (sub == "replace-costume");
         if (rest.size() < 2) {
             std::cerr << "用法：sb project " << sub << " <项目> <素材名> <新文件> [角色]\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         std::string nm = rest[0], file = rest[1];
         std::string sp = rest.size() >= 3 ? rest[2] : "";
@@ -1491,21 +1491,21 @@ int cmd_project(Args& a) {
                          "  · 本地 .js 文件 → 复制到 extensions/<id>.js 并登记\n"
                          "  · https URL      → 下载源码存为 extensions/<id>.js 并登记\n"
                          "  · 已登记的扩展    → 重新解析校验\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         return show(sbcliAddExtension(proj, rest[0]));
     } else if (sub == "list-extensions") {
         if (proj.empty()) {
             std::cerr << "用法：sb project list-extensions <项目目录>\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         std::vector<ExtEntry> list;
         ProjResult r = sbcliListExtensions(proj, list);
-        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return exitInt(ExitCode::Usage); }
         for (auto& n : r.notes) std::cout << "  · " << n << "\n";
         if (list.empty()) {
             std::cout << "（项目没有登记任何扩展）\n";
-            return 0;
+            return exitInt(ExitCode::Ok);
         }
         if (a.json) {
             Json arr = Json::array();
@@ -1523,7 +1523,7 @@ int cmd_project(Args& a) {
             Json out = Json::object();
             out["extensions"] = std::move(arr);
             std::cout << out.dump(2) << "\n";
-            return 0;
+            return exitInt(ExitCode::Ok);
         }
         std::cout << "扩展 " << list.size() << " 个：\n";
         for (const auto& e : list) {
@@ -1534,13 +1534,13 @@ int cmd_project(Args& a) {
             if (!e.parsed) std::cout << "  [未解析]";
             std::cout << "\n     " << e.source << "\n";
         }
-        return 0;
+        return exitInt(ExitCode::Ok);
     } else if (sub == "remove-extension") {
         if (rest.empty()) {
             std::cerr << "用法：sb project remove-extension <项目目录> <扩展id> [--keep-file]\n"
                          "  · 默认同时删除 extensions/<id>.js\n"
                          "  · --keep-file 只取消登记，保留源码文件\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         // --keep-file 可能出现在参数里（main 只认自己已知的开关）
         bool keep = a.keepFile;
@@ -1554,11 +1554,11 @@ int cmd_project(Args& a) {
     } else if (sub == "ext-info") {
         if (rest.empty()) {
             std::cerr << "用法：sb project ext-info <项目目录> <扩展id>\n";
-            return 2;
+            return exitInt(ExitCode::Usage);
         }
         std::vector<ExtBlockInfo> blocks;
         ProjResult r = sbcliExtInfo(proj, rest[0], blocks);
-        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
+        if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return exitInt(ExitCode::Usage); }
         for (auto& n : r.notes) std::cout << "  · " << n << "\n";
         if (a.json) {
             Json arr = Json::array();
@@ -1583,7 +1583,7 @@ int cmd_project(Args& a) {
             Json out = Json::object();
             out["blocks"] = std::move(arr);
             std::cout << out.dump(2) << "\n";
-            return 0;
+            return exitInt(ExitCode::Ok);
         }
         static const char* kType[] = {"命令", "报告", "布尔", "帽子"};
         std::cout << "积木 " << blocks.size() << " 个：\n";
@@ -1599,13 +1599,13 @@ int cmd_project(Args& a) {
                 std::cout << "\n";
             }
         }
-        return 0;
+        return exitInt(ExitCode::Ok);
     } else {
         std::cerr << "未知 project 子命令：" << sub << "\n"
                   << "可用：init / add-sprite / add-costume / add-sound /\n"
                   << "      add-variable / add-list / add-broadcast / add-extension /\n"
                   << "      list-extensions / remove-extension / ext-info\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 }
 
@@ -1621,13 +1621,13 @@ int cmd_unpack(Args& a) {
     if (out.empty() && !a.path.empty() && a.path != ".") out = a.path;
     if (in.empty() || out.empty()) {
         std::cerr << "用法：sb unpack <作品.sb3> <输出目录> [--force]\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 
     UnpackResult r = sbcliUnpack(in, out, a.force);
     if (!r.ok) {
         std::cerr << "错误：" << r.error << "\n";
-        return 2;
+        return exitInt(ExitCode::Usage);
     }
 
     if (a.json) {
@@ -1639,7 +1639,7 @@ int cmd_unpack(Args& a) {
         js["assets"]      = r.assetCount;
         js["unknownBlocks"] = r.unknownBlocks;
         std::cout << js.dump(2) << "\n";
-        return 0;
+        return exitInt(ExitCode::Ok);
     }
 
     std::cout << "已解包：" << r.outDir << "\n";
@@ -1652,7 +1652,7 @@ int cmd_unpack(Args& a) {
         std::cout << "  注意：有 " << r.unknownBlocks
                   << " 个未知积木（已原样保留，行前带 # 未知积木 注释）\n";
     std::cout << "\n下一步：sb check " << r.outDir << "  →  sb view " << r.outDir << "\n";
-    return 0;
+    return exitInt(ExitCode::Ok);
 }
 
 
@@ -1676,7 +1676,37 @@ static void printEditResult(const EditResult& r) {
 int cmd_edit(Args& a) {
     std::string proj = a.file;
     if (proj.empty()) proj = a.path;
+
+    // ---- --json：统一输出 {ok, command, changed|error+code, notes, data} ----
+    auto badArgs = [](const std::string& msg) {
+        EditResult r;
+        r.ok = false;
+        r.error = msg;
+        r.code = "E_BAD_PATH";   // 参数形态非法（缺操作/缺定位信息）
+        return r;
+    };
+    auto emit = [](const EditResult& r, Json data) -> int {
+        Json out = Json::object();
+        out["ok"] = r.ok;
+        out["command"] = "edit";
+        if (r.ok) {
+            out["changed"] = r.changed;
+            Json notes = Json::array();
+            for (const auto& n : r.notes) notes.push_back(n);
+            out["notes"] = std::move(notes);
+            out["data"] = std::move(data);
+        } else {
+            out["error"] = r.error;
+            out["code"] = r.code.empty() ? std::string("E_IO") : r.code;
+        }
+        std::cout << out.dump(2) << "\n";
+        return r.ok ? 0 : 5;
+    };
+
     if (proj.empty()) {
+        if (a.json)
+            return emit(badArgs("缺少项目目录（用法：sb edit <项目> --script-index N <操作>）"),
+                        Json::object());
         std::cerr << "用法：sb edit <项目> [--sprite 角色] --script-index N <操作>\n"
                      "  操作：--insert \"积木\" [--after K] / --delete K / --replace K \"积木\"\n"
                      "        --drop-script N / --add-script \"hat\" \"body\" / --list\n";
@@ -1685,6 +1715,33 @@ int cmd_edit(Args& a) {
 
     // 只看清单
     if (a.editList) {
+        if (a.json) {
+            std::string err, code;
+            auto infos = sbcScriptInfosEx(proj, a.sprite, err, code);
+            if (!err.empty()) {
+                EditResult bad;
+                bad.ok = false;
+                bad.error = err;
+                bad.code = code;
+                return emit(bad, Json::object());
+            }
+            Json scripts = Json::array();
+            for (const auto& si : infos) {
+                Json o = Json::object();
+                o["index"]       = si.index;
+                o["hat"]         = si.hat;
+                o["hatArg"]      = si.hatArg;
+                o["blockCount"]  = si.blockCount;
+                o["firstOpcode"] = si.firstOpcode;
+                scripts.push_back(std::move(o));
+            }
+            EditResult okr;
+            Json data = Json::object();
+            data["sprite"]  = a.sprite;
+            data["count"]   = (long long)infos.size();
+            data["scripts"] = std::move(scripts);
+            return emit(okr, std::move(data));
+        }
         auto lines = sbcListScripts(proj, a.sprite);
         if (lines.empty()) { std::cerr << "没有找到脚本（确认项目与角色）\n"; return 2; }
         std::cout << "脚本清单（" << (a.sprite.empty() ? "默认角色" : a.sprite) << "）：\n";
@@ -1693,46 +1750,125 @@ int cmd_edit(Args& a) {
     }
 
     if (!a.editBody.empty() && !a.editHat.empty()) {
-        printEditResult(sbcEditAddScript(proj, a.sprite, a.editHat, a.editBody));
+        EditResult r = sbcEditAddScript(proj, a.sprite, a.editHat, a.editBody);
+        if (a.json) {
+            Json data = Json::object();
+            data["hat"]    = a.editHat;
+            data["sprite"] = a.sprite;
+            return emit(r, std::move(data));
+        }
+        printEditResult(r);
         return 0;
     }
     if (a.editDropScript > 0) {
-        printEditResult(sbcEditDropScript(proj, a.sprite, a.editDropScript));
+        EditResult r = sbcEditDropScript(proj, a.sprite, a.editDropScript);
+        if (a.json) {
+            Json data = Json::object();
+            data["sprite"]      = a.sprite;
+            data["dropScript"]  = a.editDropScript;
+            return emit(r, std::move(data));
+        }
+        printEditResult(r);
         return 0;
     }
     // 子栈路径模式（可定位到 if/else 内部）
     if (!a.editPath.empty()) {
-        if (!a.editReplace.empty())
-            printEditResult(sbcEditReplaceAt(proj, a.sprite, a.editPath, a.editReplace));
-        else if (a.editDelete > 0)
-            printEditResult(sbcEditDeleteAt(proj, a.sprite, a.editPath));
-        else if (!a.editInsert.empty())
-            printEditResult(sbcEditInsertAt(proj, a.sprite, a.editPath, a.editInsert,
-                                            a.editAfter > 0 ? a.editAfter : -1));
-        else
+        if (!a.editReplace.empty()) {
+            EditResult r = sbcEditReplaceAt(proj, a.sprite, a.editPath, a.editReplace);
+            if (a.json) {
+                Json data = Json::object();
+                data["sprite"] = a.sprite;
+                data["path"]   = a.editPath;
+                data["block"]  = a.editReplace;
+                return emit(r, std::move(data));
+            }
+            printEditResult(r);
+        } else if (a.editDelete > 0) {
+            EditResult r = sbcEditDeleteAt(proj, a.sprite, a.editPath);
+            if (a.json) {
+                Json data = Json::object();
+                data["sprite"] = a.sprite;
+                data["path"]   = a.editPath;
+                return emit(r, std::move(data));
+            }
+            printEditResult(r);
+        } else if (!a.editInsert.empty()) {
+            EditResult r = sbcEditInsertAt(proj, a.sprite, a.editPath, a.editInsert,
+                                           a.editAfter > 0 ? a.editAfter : -1);
+            if (a.json) {
+                Json data = Json::object();
+                data["sprite"] = a.sprite;
+                data["path"]   = a.editPath;
+                data["block"]  = a.editInsert;
+                if (a.editAfter > 0) data["after"] = a.editAfter;
+                return emit(r, std::move(data));
+            }
+            printEditResult(r);
+        } else if (a.json) {
+            return emit(badArgs("--path 需要配合 --insert / --delete K / --replace \"积木\""),
+                        Json::object());
+        } else {
             std::cerr << "--path 需要配合 --insert / --delete K / --replace \"积木\"\n";
+        }
         return 0;
     }
     if (a.editScript <= 0) {
+        if (a.json)
+            return emit(badArgs("缺少 --script-index N（用 --list 先看脚本清单）"), Json::object());
         std::cerr << "缺少 --script-index N（用 --list 先看脚本清单）\n";
         return 2;
     }
     if (!a.editInsert.empty()) {
-        printEditResult(sbcEditInsert(proj, a.sprite, a.editScript,
-                                      a.editAfter < 0 ? 0 : a.editAfter, a.editInsert));
+        EditResult r = sbcEditInsert(proj, a.sprite, a.editScript,
+                                     a.editAfter < 0 ? 0 : a.editAfter, a.editInsert);
+        if (a.json) {
+            Json data = Json::object();
+            data["sprite"] = a.sprite;
+            data["script"] = a.editScript;
+            data["after"]  = (a.editAfter < 0 ? 0 : a.editAfter);
+            data["block"]  = a.editInsert;
+            return emit(r, std::move(data));
+        }
+        printEditResult(r);
         return 0;
     }
     // ⚠️ replace 必须在 delete 之前判断：两者共用 editDelete 字段
     //（--block K 是"替换第 K 块"，--delete K 是"删第 K 块"）。
     if (!a.editReplace.empty()) {
-        if (a.editDelete <= 0) { std::cerr << "--replace 需要配合 --block K 指定替换第几块\n"; return 2; }
-        printEditResult(sbcEditReplace(proj, a.sprite, a.editScript, a.editDelete, a.editReplace));
+        if (a.editDelete <= 0) {
+            if (a.json)
+                return emit(badArgs("--replace 需要配合 --block K 指定替换第几块"),
+                            Json::object());
+            std::cerr << "--replace 需要配合 --block K 指定替换第几块\n";
+            return 2;
+        }
+        EditResult r = sbcEditReplace(proj, a.sprite, a.editScript, a.editDelete, a.editReplace);
+        if (a.json) {
+            Json data = Json::object();
+            data["sprite"] = a.sprite;
+            data["script"] = a.editScript;
+            data["block"]  = a.editDelete;
+            data["new"]    = a.editReplace;
+            return emit(r, std::move(data));
+        }
+        printEditResult(r);
         return 0;
     }
     if (a.editDelete > 0) {
-        printEditResult(sbcEditDelete(proj, a.sprite, a.editScript, a.editDelete));
+        EditResult r = sbcEditDelete(proj, a.sprite, a.editScript, a.editDelete);
+        if (a.json) {
+            Json data = Json::object();
+            data["sprite"] = a.sprite;
+            data["script"] = a.editScript;
+            data["block"]  = a.editDelete;
+            return emit(r, std::move(data));
+        }
+        printEditResult(r);
         return 0;
     }
+    if (a.json)
+        return emit(badArgs("没有指定操作（--insert / --delete / --replace / "
+                            "--drop-script / --add-script）"), Json::object());
     std::cerr << "没有指定操作（--insert / --delete / --replace / --drop-script / --add-script）\n";
     return 2;
 }
@@ -1745,12 +1881,42 @@ int cmd_edit(Args& a) {
 int cmd_rename(Args& a) {
     std::string proj = a.file;
     if (proj.empty() || a.extra.size() < 3) {
+        if (a.json) {
+            Json out = Json::object();
+            out["ok"] = false;
+            out["command"] = "rename";
+            out["error"] = "用法：sb rename <项目> <variable|list|broadcast> <旧名> <新名>";
+            out["code"] = "E_BAD_PATH";
+            std::cout << out.dump(2) << "\n";
+            return 5;
+        }
         std::cerr << "用法：sb rename <项目> <variable|list|broadcast> <旧名> <新名>\n"
                      "  会改写所有 block.sbcli 里的引用 + meta 声明\n"
                      "  例：sb rename ./我的项目 variable 分数 得分\n";
         return 2;
     }
     EditResult r = sbcRename(proj, a.extra[0], a.extra[1], a.extra[2]);
+    if (a.json) {
+        Json out = Json::object();
+        out["ok"] = r.ok;
+        out["command"] = "rename";
+        if (r.ok) {
+            out["changed"] = r.changed;
+            Json notes = Json::array();
+            for (const auto& n : r.notes) notes.push_back(n);
+            out["notes"] = std::move(notes);
+            Json data = Json::object();
+            data["kind"]    = a.extra[0];
+            data["oldName"] = a.extra[1];
+            data["newName"] = a.extra[2];
+            out["data"] = std::move(data);
+        } else {
+            out["error"] = r.error;
+            out["code"] = r.code.empty() ? std::string("E_IO") : r.code;
+        }
+        std::cout << out.dump(2) << "\n";
+        return r.ok ? 0 : 5;
+    }
     printEditResult(r);
     return r.ok ? 0 : 2;
 }
@@ -1764,14 +1930,54 @@ int cmd_rename(Args& a) {
 // ==========================================================================
 
 int cmd_merge(Args& a) {
+    // --json 输出助手：成功 {"ok":true,"command","changed","notes","data"}；
+    // 失败 {"ok":false,"command","error","code"}
+    auto emitMerge = [](const MergeResult& r, Json data) -> int {
+        Json out = Json::object();
+        out["ok"] = r.ok;
+        out["command"] = "merge";
+        if (r.ok) {
+            out["changed"] = r.sprites;
+            Json notes = Json::array();
+            for (const auto& n : r.notes) notes.push_back(n);
+            out["notes"] = std::move(notes);
+            out["data"] = std::move(data);
+        } else {
+            out["error"] = r.error;
+            out["code"] = r.code.empty() ? std::string("E_IO") : r.code;
+        }
+        std::cout << out.dump(2) << "\n";
+        return r.ok ? 0 : 5;
+    };
+    auto mergeBadArgs = [](const std::string& msg) {
+        MergeResult r;
+        r.ok = false;
+        r.error = msg;
+        r.code = "E_BAD_PATH";
+        return r;
+    };
+
     // --export 模式：extra = [源项目, 角色名, 输出项目]
     if (a.exportSprite) {
         // 位置参数解析：第 1 个进 a.file，其余进 a.extra
         if (a.file.empty() || a.extra.size() < 2) {
+            if (a.json)
+                return emitMerge(mergeBadArgs(
+                    "用法：sb merge --export <源项目> <角色名> <输出项目目录>"), Json::object());
             std::cerr << "用法：sb merge --export <源项目> <角色名> <输出项目目录>\n";
             return 2;
         }
         MergeResult r = sbcExportSprite(a.file, a.extra[0], a.extra[1]);
+        if (a.json) {
+            Json data = Json::object();
+            data["mode"]    = "export";
+            data["source"]  = a.file;
+            data["sprite"]  = a.extra[0];
+            data["outDir"]  = a.extra[1];
+            data["sprites"] = r.sprites;
+            data["renamed"] = r.renamed;
+            return emitMerge(r, std::move(data));
+        }
         if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
         for (auto& n : r.notes) std::cout << "  " << n << "\n";
         return 0;
@@ -1779,6 +1985,9 @@ int cmd_merge(Args& a) {
     // 合并模式：file=目标项目，extra[0]=源项目，extra[1]=角色（可选）
     std::string dst = a.file.empty() ? a.path : a.file;
     if (dst.empty() || a.extra.empty()) {
+        if (a.json)
+            return emitMerge(mergeBadArgs(
+                "用法：sb merge <目标项目> <源项目> [角色名]"), Json::object());
         std::cerr << "用法：sb merge <目标项目> <源项目> [角色名]\n"
                      "      sb merge --export <源项目> <角色名> <输出项目>\n"
                      "  先用 sb unpack 把两个 .sb3 拆成项目目录再合并\n";
@@ -1786,6 +1995,16 @@ int cmd_merge(Args& a) {
     }
     std::string filter = a.extra.size() >= 2 ? a.extra[1] : "";
     MergeResult r = sbcMergeProject(dst, a.extra[0], filter);
+    if (a.json) {
+        Json data = Json::object();
+        data["mode"]   = "merge";
+        data["dst"]    = dst;
+        data["src"]    = a.extra[0];
+        data["filter"] = filter;
+        data["sprites"] = r.sprites;
+        data["renamed"] = r.renamed;
+        return emitMerge(r, std::move(data));
+    }
     if (!r.ok) { std::cerr << "错误：" << r.error << "\n"; return 2; }
     for (auto& n : r.notes) std::cout << "  " << n << "\n";
     std::cout << "  合并完成：" << r.sprites << " 个角色";

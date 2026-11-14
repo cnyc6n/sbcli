@@ -14,11 +14,19 @@ namespace fs = std::filesystem;
 
 namespace sb {
 namespace {
-
-EditResult fail(const std::string& msg) {
+// 错误码约定（输出到 --json 的 "code" 字段）：
+//   E_NO_PROJECT   项目根无效
+//   E_NO_SPRITE    角色不存在
+//   E_BAD_PATH     路径语法错 / 参数形态非法
+//   E_OUT_OF_RANGE 序号越界
+//   E_PARSE        积木文本解析失败
+//   E_STRUCT       block.sbcli 结构错误
+//   E_IO           读写失败
+EditResult failWith(const std::string& code, const std::string& msg) {
     EditResult r;
     r.ok = false;
     r.error = msg;
+    r.code = code;
     return r;
 }
 
@@ -68,7 +76,7 @@ std::string resolveSpriteDir(const std::string& root, const std::string& sprite)
 EditResult editBlockFile(const std::string& blockPath,
                          const std::function<EditResult(SbcFile&)>& mutate) {
     std::ifstream in(fs::u8path(blockPath), std::ios::binary);
-    if (!in.good()) return fail("读不到 " + blockPath);
+    if (!in.good()) return failWith("E_IO", "读不到 " + blockPath);
     std::stringstream ss;
     ss << in.rdbuf();
     in.close();
@@ -78,8 +86,9 @@ EditResult editBlockFile(const std::string& blockPath,
     // 结构错误就不动（避免把坏文件写得更坏）
     for (const auto& d : f.diags)
         if (d.severity == SbcSeverity::Error)
-            return fail("block.sbcli 有结构错误（第 " + std::to_string(d.line) +
-                        " 行：" + d.message + "），先 `sb check` 修好再编辑");
+            return failWith("E_STRUCT",
+                            "block.sbcli 有结构错误（第 " + std::to_string(d.line) +
+                            " 行：" + d.message + "），先 `sb check` 修好再编辑");
 
     EditResult r = mutate(f);
     if (!r.ok) return r;
@@ -93,7 +102,7 @@ EditResult editBlockFile(const std::string& blockPath,
     }
 
     std::ofstream ofs(fs::u8path(blockPath), std::ios::binary);
-    if (!ofs.good()) return fail("写不了 " + blockPath);
+    if (!ofs.good()) return failWith("E_IO", "写不了 " + blockPath);
     ofs << out;
     return r;
 }
@@ -122,20 +131,20 @@ bool parseOneBlock(const std::string& text, SbcBlock& out, std::string& err) {
 EditResult sbcEditInsert(const std::string& project, const std::string& sprite,
                          int scriptIdx, int afterBlock, const std::string& blockText) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
 
     SbcBlock nb;
     std::string perr;
-    if (!parseOneBlock(blockText, nb, perr)) return fail("积木文本解析失败：" + perr);
+    if (!parseOneBlock(blockText, nb, perr)) return failWith("E_PARSE", "积木文本解析失败：" + perr);
 
     return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
         if (scriptIdx < 1 || (size_t)scriptIdx > f.scripts.size())
-            return fail("脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
+            return failWith("E_OUT_OF_RANGE", "脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
         auto& blocks = f.scripts[(size_t)scriptIdx - 1].blocks;
         if (afterBlock < 0 || (size_t)afterBlock > blocks.size())
-            return fail("位置越界：该脚本有 " + std::to_string(blocks.size()) + " 个顶层块");
+            return failWith("E_OUT_OF_RANGE", "位置越界：该脚本有 " + std::to_string(blocks.size()) + " 个顶层块");
         blocks.insert(blocks.begin() + afterBlock, nb);
         EditResult r;
         r.changed = 1;
@@ -148,16 +157,16 @@ EditResult sbcEditInsert(const std::string& project, const std::string& sprite,
 EditResult sbcEditDelete(const std::string& project, const std::string& sprite,
                          int scriptIdx, int blockIdx) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
 
     return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
         if (scriptIdx < 1 || (size_t)scriptIdx > f.scripts.size())
-            return fail("脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
+            return failWith("E_OUT_OF_RANGE", "脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
         auto& blocks = f.scripts[(size_t)scriptIdx - 1].blocks;
         if (blockIdx < 1 || (size_t)blockIdx > blocks.size())
-            return fail("块序号越界：该脚本有 " + std::to_string(blocks.size()) + " 个顶层块");
+            return failWith("E_OUT_OF_RANGE", "块序号越界：该脚本有 " + std::to_string(blocks.size()) + " 个顶层块");
         std::string op = blocks[(size_t)blockIdx - 1].opcode;
         blocks.erase(blocks.begin() + (blockIdx - 1));
         EditResult r;
@@ -171,20 +180,20 @@ EditResult sbcEditDelete(const std::string& project, const std::string& sprite,
 EditResult sbcEditReplace(const std::string& project, const std::string& sprite,
                           int scriptIdx, int blockIdx, const std::string& blockText) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
 
     SbcBlock nb;
     std::string perr;
-    if (!parseOneBlock(blockText, nb, perr)) return fail("积木文本解析失败：" + perr);
+    if (!parseOneBlock(blockText, nb, perr)) return failWith("E_PARSE", "积木文本解析失败：" + perr);
 
     return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
         if (scriptIdx < 1 || (size_t)scriptIdx > f.scripts.size())
-            return fail("脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
+            return failWith("E_OUT_OF_RANGE", "脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
         auto& blocks = f.scripts[(size_t)scriptIdx - 1].blocks;
         if (blockIdx < 1 || (size_t)blockIdx > blocks.size())
-            return fail("块序号越界：该脚本有 " + std::to_string(blocks.size()) + " 个顶层块");
+            return failWith("E_OUT_OF_RANGE", "块序号越界：该脚本有 " + std::to_string(blocks.size()) + " 个顶层块");
         std::string oldOp = blocks[(size_t)blockIdx - 1].opcode;
         blocks[(size_t)blockIdx - 1] = nb;
         EditResult r;
@@ -198,13 +207,13 @@ EditResult sbcEditReplace(const std::string& project, const std::string& sprite,
 EditResult sbcEditDropScript(const std::string& project, const std::string& sprite,
                              int scriptIdx) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
 
     return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
         if (scriptIdx < 1 || (size_t)scriptIdx > f.scripts.size())
-            return fail("脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
+            return failWith("E_OUT_OF_RANGE", "脚本序号越界：只有 " + std::to_string(f.scripts.size()) + " 个脚本");
         std::string hat = f.scripts[(size_t)scriptIdx - 1].hat;
         f.scripts.erase(f.scripts.begin() + (scriptIdx - 1));
         EditResult r;
@@ -217,18 +226,18 @@ EditResult sbcEditDropScript(const std::string& project, const std::string& spri
 EditResult sbcEditAddScript(const std::string& project, const std::string& sprite,
                             const std::string& hat, const std::string& bodyText) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
-    if (hat.empty()) return fail("缺少 @script 类型（flag / broadcast 名 / key 名 …）");
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (hat.empty()) return failWith("E_PARSE", "缺少 @script 类型（flag / broadcast 名 / key 名 …）");
 
     // 整段 body 作为临时文件解析
     std::string probe = "@script " + hat + "\n" + bodyText + "\n";
     SbcFile nf = sbcParse(probe);
     for (const auto& d : nf.diags)
         if (d.severity == SbcSeverity::Error)
-            return fail("脚本解析失败：第 " + std::to_string(d.line) + " 行：" + d.message);
-    if (nf.scripts.empty()) return fail("解析不出脚本");
+            return failWith("E_PARSE", "脚本解析失败：第 " + std::to_string(d.line) + " 行：" + d.message);
+    if (nf.scripts.empty()) return failWith("E_PARSE", "解析不出脚本");
 
     return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
         SbcScript s = nf.scripts[0];
@@ -276,9 +285,9 @@ static int rewriteBlocks(std::vector<SbcBlock>& blocks, const std::string& key,
 EditResult sbcRename(const std::string& project, const std::string& kind,
                      const std::string& oldName, const std::string& newName) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
-    if (oldName.empty() || newName.empty()) return fail("旧名和新名都不能为空");
-    if (oldName == newName) return fail("新旧名字相同，无需重命名");
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
+    if (oldName.empty() || newName.empty()) return failWith("E_BAD_PATH", "旧名和新名都不能为空");
+    if (oldName == newName) return failWith("E_BAD_PATH", "新旧名字相同，无需重命名");
 
     // 一个 kind 可能对应多个参数键（如造型既可能是 COSTUME 也可能是
     // looks_costume 桩块里的 COSTUME；声音是 SOUND_MENU / sounds_menu 的 SOUND_MENU）。
@@ -288,8 +297,8 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
     else if (kind == "broadcast") keys = { "BROADCAST_INPUT", "BROADCAST_OPTION" };
     else if (kind == "costume")   keys = { "COSTUME", "BACKDROP" };
     else if (kind == "sound")     keys = { "SOUND_MENU", "SOUND" };
-    else if (kind == "sprite")    return fail("角色重命名请用 `sb project rename-sprite`（牵涉目录与素材）");
-    else return fail("kind 支持 variable / list / broadcast / costume / sound");
+    else if (kind == "sprite")    return failWith("E_BAD_PATH", "角色重命名请用 `sb project rename-sprite`（牵涉目录与素材）");
+    else return failWith("E_BAD_PATH", "kind 支持 variable / list / broadcast / costume / sound");
 
     EditResult r;
     int total = 0;
@@ -396,25 +405,70 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
     return r;
 }
 
+std::vector<ScriptInfo> sbcScriptInfosEx(const std::string& project,
+                                         const std::string& sprite,
+                                         std::string& err, std::string& code) {
+    std::vector<ScriptInfo> out;
+    err.clear();
+    code.clear();
+
+    std::string root = meta::findProjectRoot(project);
+    if (root.empty()) {
+        err = "找不到项目根目录：" + project;
+        code = "E_NO_PROJECT";
+        return out;
+    }
+    std::string dir = resolveSpriteDir(root, sprite);
+    if (dir.empty()) {
+        err = "找不到角色：" + (sprite.empty() ? "(默认)" : sprite);
+        code = "E_NO_SPRITE";
+        return out;
+    }
+    std::string bp = dir + "/block.sbcli";
+    std::error_code ec;
+    if (!fs::exists(fs::u8path(bp), ec)) {
+        // 角色存在但没有 block.sbcli：视为"0 个脚本"，不是错误
+        return out;
+    }
+
+    SbcFile f = sbcParseFile(bp);
+    for (const auto& d : f.diags)
+        if (d.severity == SbcSeverity::Error) {
+            err = "block.sbcli 有结构错误（第 " + std::to_string(d.line) +
+                  " 行：" + d.message + "），先 `sb check` 修好再看脚本清单";
+            code = "E_STRUCT";
+            return {};
+        }
+
+    out.reserve(f.scripts.size());
+    for (size_t k = 0; k < f.scripts.size(); ++k) {
+        const SbcScript& s = f.scripts[k];
+        ScriptInfo si;
+        si.index       = (int)k + 1;
+        si.hat         = s.hat;
+        si.hatArg      = s.hatArg;
+        si.blockCount  = (int)s.blocks.size();
+        si.firstOpcode = s.blocks.empty() ? std::string() : s.blocks[0].opcode;
+        out.push_back(std::move(si));
+    }
+    return out;
+}
+
+std::vector<ScriptInfo> sbcScriptInfos(const std::string& project,
+                                       const std::string& sprite) {
+    std::string err, code;
+    return sbcScriptInfosEx(project, sprite, err, code);
+}
+
 std::vector<std::string> sbcListScripts(const std::string& project,
                                         const std::string& sprite) {
     std::vector<std::string> out;
-    std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return out;
-    std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return out;
-    std::string bp = dir + "/block.sbcli";
-    std::error_code ec;
-    if (!fs::exists(fs::u8path(bp), ec)) return out;
-
-    SbcFile f = sbcParseFile(bp);
-    for (size_t k = 0; k < f.scripts.size(); ++k) {
-        const SbcScript& s = f.scripts[k];
-        std::string head = "@script " + s.hat;
-        if (!s.hatArg.empty()) head += " " + s.hatArg;
-        std::string first = s.blocks.empty() ? "(空脚本)" : s.blocks[0].opcode;
-        out.push_back("  " + std::to_string(k + 1) + ") " + head +
-                      "   [" + std::to_string(s.blocks.size()) + " 块]  首块: " + first);
+    for (const auto& si : sbcScriptInfos(project, sprite)) {
+        std::string head = "@script " + si.hat;
+        if (!si.hatArg.empty()) head += " " + si.hatArg;
+        std::string first = si.firstOpcode.empty() ? "(空脚本)" : si.firstOpcode;
+        out.push_back("  " + std::to_string(si.index) + ") " + head +
+                      "   [" + std::to_string(si.blockCount) + " 块]  首块: " + first);
     }
     return out;
 }
@@ -487,24 +541,24 @@ EditResult sbcEditInsertAt(const std::string& project, const std::string& sprite
                            const std::string& path, const std::string& blockText,
                            int afterBlock) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
 
     EditPath ep = sbcParseEditPath(path);
-    if (!ep.ok) return fail("路径无效：" + ep.error);
+    if (!ep.ok) return failWith("E_BAD_PATH", "路径无效：" + ep.error);
 
     SbcBlock nb;
     std::string perr;
-    if (!parseOneBlock(blockText, nb, perr)) return fail("积木文本解析失败：" + perr);
+    if (!parseOneBlock(blockText, nb, perr)) return failWith("E_PARSE", "积木文本解析失败：" + perr);
 
     return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
         std::string err;
         std::vector<SbcBlock>* sub = resolveSubstack(f, ep, err);
-        if (!sub) return fail(err);
+        if (!sub) return failWith("E_OUT_OF_RANGE", err);
         int pos = (afterBlock < 0) ? (int)sub->size() : afterBlock;
         if (pos < 0 || (size_t)pos > sub->size())
-            return fail("插入位置越界：该子栈有 " + std::to_string(sub->size()) + " 个块");
+            return failWith("E_OUT_OF_RANGE", "插入位置越界：该子栈有 " + std::to_string(sub->size()) + " 个块");
         sub->insert(sub->begin() + pos, nb);
         EditResult r;
         r.changed = 1;
@@ -517,14 +571,14 @@ EditResult sbcEditInsertAt(const std::string& project, const std::string& sprite
 EditResult sbcEditDeleteAt(const std::string& project, const std::string& sprite,
                            const std::string& path) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
 
     // 删除需要"父容器 + 索引"：把最后一段拆出来
     EditPath ep = sbcParseEditPath(path);
-    if (!ep.ok) return fail("路径无效：" + ep.error);
-    if (ep.steps.empty()) return fail("删除需要定位到具体块（如 1.2 或 1.2.0.3）");
+    if (!ep.ok) return failWith("E_BAD_PATH", "路径无效：" + ep.error);
+    if (ep.steps.empty()) return failWith("E_BAD_PATH", "删除需要定位到具体块（如 1.2 或 1.2.0.3）");
     auto last = ep.steps.back();
     ep.steps.pop_back();
 
@@ -533,15 +587,15 @@ EditResult sbcEditDeleteAt(const std::string& project, const std::string& sprite
         std::vector<SbcBlock>* container = nullptr;
         if (ep.steps.empty()) {
             if (ep.script < 1 || (size_t)ep.script > f.scripts.size())
-                return fail("脚本序号越界");
+                return failWith("E_OUT_OF_RANGE", "脚本序号越界");
             container = &f.scripts[(size_t)ep.script - 1].blocks;
         } else {
             container = resolveSubstack(f, ep, err);
-            if (!container) return fail(err);
+            if (!container) return failWith("E_OUT_OF_RANGE", err);
         }
         int idx = last.first;
         if (idx < 1 || (size_t)idx > container->size())
-            return fail("块序号越界：该层有 " + std::to_string(container->size()) + " 个块");
+            return failWith("E_OUT_OF_RANGE", "块序号越界：该层有 " + std::to_string(container->size()) + " 个块");
         std::string op = (*container)[(size_t)idx - 1].opcode;
         container->erase(container->begin() + (idx - 1));
         EditResult r;
@@ -554,34 +608,34 @@ EditResult sbcEditDeleteAt(const std::string& project, const std::string& sprite
 EditResult sbcEditReplaceAt(const std::string& project, const std::string& sprite,
                             const std::string& path, const std::string& blockText) {
     std::string root = meta::findProjectRoot(project);
-    if (root.empty()) return fail("找不到项目根目录：" + project);
+    if (root.empty()) return failWith("E_NO_PROJECT", "找不到项目根目录：" + project);
     std::string dir = resolveSpriteDir(root, sprite);
-    if (dir.empty()) return fail("找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
+    if (dir.empty()) return failWith("E_NO_SPRITE", "找不到角色：" + (sprite.empty() ? "(默认)" : sprite));
 
     EditPath ep = sbcParseEditPath(path);
-    if (!ep.ok) return fail("路径无效：" + ep.error);
-    if (ep.steps.empty()) return fail("替换需要定位到具体块（如 1.2 或 1.2.0.3）");
+    if (!ep.ok) return failWith("E_BAD_PATH", "路径无效：" + ep.error);
+    if (ep.steps.empty()) return failWith("E_BAD_PATH", "替换需要定位到具体块（如 1.2 或 1.2.0.3）");
     auto last = ep.steps.back();
     ep.steps.pop_back();
 
     SbcBlock nb;
     std::string perr;
-    if (!parseOneBlock(blockText, nb, perr)) return fail("积木文本解析失败：" + perr);
+    if (!parseOneBlock(blockText, nb, perr)) return failWith("E_PARSE", "积木文本解析失败：" + perr);
 
     return editBlockFile(dir + "/block.sbcli", [&](SbcFile& f) -> EditResult {
         std::string err;
         std::vector<SbcBlock>* container = nullptr;
         if (ep.steps.empty()) {
             if (ep.script < 1 || (size_t)ep.script > f.scripts.size())
-                return fail("脚本序号越界");
+                return failWith("E_OUT_OF_RANGE", "脚本序号越界");
             container = &f.scripts[(size_t)ep.script - 1].blocks;
         } else {
             container = resolveSubstack(f, ep, err);
-            if (!container) return fail(err);
+            if (!container) return failWith("E_OUT_OF_RANGE", err);
         }
         int idx = last.first;
         if (idx < 1 || (size_t)idx > container->size())
-            return fail("块序号越界：该层有 " + std::to_string(container->size()) + " 个块");
+            return failWith("E_OUT_OF_RANGE", "块序号越界：该层有 " + std::to_string(container->size()) + " 个块");
         std::string oldOp = (*container)[(size_t)idx - 1].opcode;
         (*container)[(size_t)idx - 1] = nb;
         EditResult r;

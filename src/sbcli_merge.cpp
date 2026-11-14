@@ -14,11 +14,16 @@ using namespace sb::meta;
 
 namespace sb {
 namespace {
-
-MergeResult fail(const std::string& msg) {
+// 错误码约定（输出到 --json 的 "code" 字段）：
+//   E_NO_PROJECT   项目根无效
+//   E_NO_SPRITE    角色不存在（导出时）/ 源项目里没有可合并的角色
+//   E_BAD_PATH     源与目标相同等参数形态问题
+//   E_IO           读写失败
+MergeResult failWith(const std::string& code, const std::string& msg) {
     MergeResult r;
     r.ok = false;
     r.error = msg;
+    r.code = code;
     return r;
 }
 
@@ -123,13 +128,13 @@ MergeResult sbcMergeProject(const std::string& dstProject,
                             const std::string& spriteFilter) {
     std::string dst = findProjectRoot(dstProject);
     std::string src = findProjectRoot(srcProject);
-    if (dst.empty()) return fail("目标项目根目录无效：" + dstProject);
-    if (src.empty()) return fail("源项目根目录无效：" + srcProject);
-    if (dst == src) return fail("源和目标是同一个项目");
+    if (dst.empty()) return failWith("E_NO_PROJECT", "目标项目根目录无效：" + dstProject);
+    if (src.empty()) return failWith("E_NO_PROJECT", "源项目根目录无效：" + srcProject);
+    if (dst == src) return failWith("E_BAD_PATH", "源和目标是同一个项目");
 
     MergeResult r;
     std::vector<SpriteDir> srcSprites = listSprites(src);
-    if (srcSprites.empty()) return fail("源项目里没有角色（只有舞台？）");
+    if (srcSprites.empty()) return failWith("E_NO_SPRITE", "源项目里没有角色（只有舞台？）");
 
     // 目标已有角色名（用于重名检测）
     std::set<std::string> taken;
@@ -257,7 +262,7 @@ MergeResult sbcMergeProject(const std::string& dstProject,
     }
 
     if (r.sprites == 0)
-        return fail("没有匹配到要合并的角色" +
+        return failWith("E_NO_SPRITE", "没有匹配到要合并的角色" +
                     (spriteFilter.empty() ? std::string() : "「" + spriteFilter + "」"));
     r.notes.push_back("提示：合并后请跑 `sb check` 确认引用（变量/广播可能需 `sb fix`）");
     return r;
@@ -267,15 +272,15 @@ MergeResult sbcExportSprite(const std::string& srcProject,
                             const std::string& spriteName,
                             const std::string& outProject) {
     std::string src = findProjectRoot(srcProject);
-    if (src.empty()) return fail("源项目根目录无效：" + srcProject);
-    if (spriteName.empty()) return fail("缺少角色名");
+    if (src.empty()) return failWith("E_NO_PROJECT", "源项目根目录无效：" + srcProject);
+    if (spriteName.empty()) return failWith("E_BAD_PATH", "缺少角色名");
 
     std::vector<SpriteDir> sprites = listSprites(src);
     SpriteDir hit;
     bool found = false;
     for (auto& s : sprites)
         if (low(s.name) == low(spriteName) || low(s.id) == low(spriteName)) { hit = s; found = true; break; }
-    if (!found) return fail("找不到角色：" + spriteName);
+    if (!found) return failWith("E_NO_SPRITE", "找不到角色：" + spriteName);
 
     // 建目标项目骨架
     std::error_code ec;

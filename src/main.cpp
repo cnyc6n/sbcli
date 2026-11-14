@@ -1,5 +1,6 @@
 // src/main.cpp
 #include "commands.hpp"
+#include "sbcli_mcp.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -69,6 +70,16 @@ static void printHelp() {
         "  sb check 项目目录 --json     # 结构化输出，有错误时退出码 1\n"
         "  sb view 项目目录             # 角色清单 + block.sbcli 的中文脚本\n"
         "  sb unpack 作品.sb3 目录     # 拆成 sbcli 项目（pack 的逆操作）\n"
+        "\n"
+        "退出码（脚本/CI 判断失败类型，详见 docs/exit-codes.md）：\n"
+        "  0  成功            正常完成\n"
+        "  1  通用失败        未分类错误（含文件读不出、解压失败、check 发现 error）\n"
+        "  2  用法错误        参数缺失 / 未知选项 / 未知命令 / 目标不支持该命令\n"
+        "  3  输入无效        预留（文件不存在 / 格式不支持 / 压缩包损坏，当前多数仍是 1）\n"
+        "  4  校验失败        预留（check 发现 error 级问题，当前仍是 1）\n"
+        "  5  编辑冲突        预留（序号越界 / 重复登记 / 状态不允许，当前仍是 2）\n"
+        "  6  依赖缺失        预留（需要 node 但找不到 / 扩展源码缺失，当前仍是 2）\n"
+        "  7  权限或 IO       预留（读写失败 / 磁盘满，当前多数仍是 1）\n"
         "\n";
 }
 
@@ -172,7 +183,7 @@ int main(int argc, char** argv) {
             }
             else {
                 std::cerr << "未知选项：" << k << "\n";
-                return 2;
+                return (int)ExitCode::Usage;
             }
         }
 
@@ -200,12 +211,13 @@ int main(int argc, char** argv) {
         else if (a.cmd == "edit")    return cmd_edit(a);
         else if (a.cmd == "rename")  return cmd_rename(a);
         else if (a.cmd == "merge")   return cmd_merge(a);
+        else if (a.cmd == "mcp")     return cmd_mcp(a);
         else if (a.cmd == "pack")    return cmd_pack(a);
         else if (a.cmd == "unpack")  return cmd_unpack(a);
         else {
             std::cerr << "未知命令：" << a.cmd << "\n";
             printHelp();
-            return 2;
+            return (int)ExitCode::Usage;
         }
     } catch (const Sb1Error& e) {
         std::cerr << "错误：" << e.what() << "\n";
