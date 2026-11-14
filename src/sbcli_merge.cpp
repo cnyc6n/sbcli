@@ -170,7 +170,66 @@ MergeResult sbcMergeProject(const std::string& dstProject,
         else
             std::ofstream(fs::u8path(dstBlock)) << "";
 
-        // 3) 目标项目里如果有别的角色引用了「sp.name」（如 motion_goto_menu OBJECT=名字），
+        // 3) 全局变量/列表/广播冲突处理：
+        //    源项目的全局变量合并进目标后，若同名但初值不同，直接沿用会让角色读到
+        //    错误的值。做法：把角色 block.sbcli 里对这些变量的引用改成「角色_变量名」，
+        //    并在角色 meta 里登记为**私有**变量（初值用源项目的那个）。
+        {
+            meta::RootMeta srcRoot = meta::loadRootMeta(src + "/meta.sbcli");
+            meta::RootMeta dstRoot = meta::loadRootMeta(dst + "/meta.sbcli");
+            std::map<std::string, std::string> toLocal;   // 原名 → 私有新名
+            for (const auto& kv : srcRoot.variables) {
+                auto dit = dstRoot.variables.find(kv.first);
+                if (dit != dstRoot.variables.end() && dit->second != kv.second) {
+                    std::string nn = finalName + "_" + kv.first;
+                    toLocal[kv.first] = nn;
+                    cm.variables.insert(nn);
+                    r.notes.push_back("变量「" + kv.first + "」与目标冲突（值 " +
+                                      dit->second + " vs " + kv.second +
+                                      "），已改为角色私有「" + nn + "」");
+                }
+            }
+            for (const auto& kv : srcRoot.lists) {
+                auto dit = dstRoot.lists.find(kv.first);
+                if (dit != dstRoot.lists.end() && dit->second != kv.second) {
+                    std::string nn = finalName + "_" + kv.first;
+                    toLocal[kv.first] = nn;
+                    cm.lists.insert(nn);
+                    r.notes.push_back("列表「" + kv.first + "」与目标冲突，已改为角色私有「" + nn + "」");
+                }
+            }
+            if (!toLocal.empty()) {
+                // 把角色 meta 重新写一遍（带私有变量）
+                writeCharMeta(dstDir + "/meta.sbcli", cm, finalName, false);
+
+                // 改 block.sbcli 里的引用
+                std::string bp = dstDir + "/block.sbcli";
+                std::error_code ec2;
+                if (fs::is_regular_file(fs::u8path(bp), ec2)) {
+                    std::ifstream in2(fs::u8path(bp), std::ios::binary);
+                    std::stringstream buf;
+                    buf << in2.rdbuf();
+                    std::string txt = buf.str();
+                    in2.close();
+                    // 保守做法：只在 VARIABLE="名字" / LIST="名字" 形态上替换
+                    for (const auto& kv : toLocal) {
+                        for (const char* kk : { "VARIABLE", "LIST" }) {
+                            std::string from = std::string(kk) + "=\"" + kv.first + "\"";
+                            std::string to   = std::string(kk) + "=\"" + kv.second + "\"";
+                            size_t pos = 0;
+                            while ((pos = txt.find(from, pos)) != std::string::npos) {
+                                txt.replace(pos, from.size(), to);
+                                pos += to.size();
+                            }
+                        }
+                    }
+                    std::ofstream ofs(fs::u8path(bp), std::ios::binary);
+                    ofs << txt;
+                }
+            }
+        }
+
+        // 4) 目标项目里如果有别的角色引用了「sp.name」（如 motion_goto_menu OBJECT=名字），
         //    改名后要把这些引用改成 finalName
         if (renamedSelf) {
             ++r.renamed;

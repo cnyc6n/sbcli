@@ -663,3 +663,55 @@ Encoding = https://extensions.turbowarp.org/encoding.js   # 在线 URL
 event_whenflagclicked
 looks_sayforsecs MESSAGE=(Encoding_encode string="你好" code="Base64") SECS=1
 ```
+
+## 9. 脚本编辑 / 重命名 / 跨作品（sb edit / rename / merge）
+
+### 9.1 sb edit —— 脚本级编辑
+
+所有编辑都走「解析 → 改 AST → sbcUnparse 写回」，不直接改文本行，
+所以缩进/引号/转义不会错；写回前先查结构错误，有错就拒绝写（坏文件不动）。
+
+```
+sb edit <项目> --list                                   # 先看脚本清单（拿 index）
+sb edit <项目> --script-index N --insert "积木" [--after K]
+sb edit <项目> --script-index N --delete K
+sb edit <项目> --script-index N --block K --replace "积木"
+sb edit <项目> --drop-script N
+sb edit <项目> --add-script "flag" "积木行1\n积木行2"
+sb edit <项目> --sprite 角色名 ...                       # 指定角色（默认第一个非舞台）
+```
+
+**注释会被保留**：写回时把原文件里「紧邻块上方」的注释行回填
+（如 unpack 为未知积木生成的 `# 未知积木: xxx`）。
+
+### 9.2 sb rename —— 变量/列表/广播/造型/声音重命名
+
+```
+sb rename <项目> variable  旧名 新名
+sb rename <项目> list      旧名 新名
+sb rename <项目> broadcast 旧名 新名
+sb rename <项目> costume   旧名 新名
+sb rename <项目> sound     旧名 新名
+```
+
+会同时改写：
+- 所有 `block.sbcli` 里的引用（**含嵌套 reporter 内部**，如 `(looks_costume COSTUME="白子")`）
+- 根 meta 的 `[variables]/[lists]/[broadcasts]` 段
+- 角色 meta 的 `costumes/sounds` 表
+
+### 9.3 sb merge —— 跨作品合并 / 导出角色
+
+```
+sb merge <目标项目> <源项目> [角色名]          # 合并（省略角色名=全部非舞台角色）
+sb merge --export <源项目> <角色名> <输出项目>  # 导出单角色为独立项目
+```
+
+- **角色重名**：自动改名为「名字2」「名字3」…
+- **素材重名但内容不同**：加后缀 `_2` 避免覆盖
+- **全局变量/列表冲突**（同名但初值不同）：自动降级为该角色的**私有**变量，
+  命名 `<角色名>_<变量名>`，并把脚本引用一起改掉 —— 避免合并后读到错误的值
+
+### 9.4 已知限制
+- `sb edit` 只改**顶层块**序列（不插入到子栈内部）
+- `sb merge` 不合并广播定义冲突（同名广播视为同一个）
+- 造型重命名后，`assets/` 下的文件名不变（只改登记名与引用）

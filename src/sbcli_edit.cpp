@@ -84,7 +84,7 @@ EditResult editBlockFile(const std::string& blockPath,
     EditResult r = mutate(f);
     if (!r.ok) return r;
 
-    std::string out = sbcUnparse(f);
+    std::string out = sbcUnparseKeepComments(f, src);
     if (!out.empty() && out.back() != '\n') out += '\n';
     // 头部注释保留（sbcUnparse 不含它，但我们不想丢"由 sb unpack 生成"这类说明）
     if (src.rfind("#", 0) == 0) {
@@ -280,12 +280,16 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
     if (oldName.empty() || newName.empty()) return fail("旧名和新名都不能为空");
     if (oldName == newName) return fail("新旧名字相同，无需重命名");
 
-    std::string key;
-    if (kind == "variable")       key = "VARIABLE";
-    else if (kind == "list")      key = "LIST";
-    else if (kind == "broadcast") key = "BROADCAST_INPUT";
+    // 一个 kind 可能对应多个参数键（如造型既可能是 COSTUME 也可能是
+    // looks_costume 桩块里的 COSTUME；声音是 SOUND_MENU / sounds_menu 的 SOUND_MENU）。
+    std::vector<std::string> keys;
+    if (kind == "variable")       keys = { "VARIABLE" };
+    else if (kind == "list")      keys = { "LIST" };
+    else if (kind == "broadcast") keys = { "BROADCAST_INPUT", "BROADCAST_OPTION" };
+    else if (kind == "costume")   keys = { "COSTUME", "BACKDROP" };
+    else if (kind == "sound")     keys = { "SOUND_MENU", "SOUND" };
     else if (kind == "sprite")    return fail("角色重命名请用 `sb project rename-sprite`（牵涉目录与素材）");
-    else return fail("kind 只支持 variable / list / broadcast");
+    else return fail("kind 支持 variable / list / broadcast / costume / sound");
 
     EditResult r;
     int total = 0;
@@ -298,7 +302,8 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
             if (!fs::exists(fs::u8path(bp), ec)) continue;
             EditResult one = editBlockFile(bp, [&](SbcFile& f) -> EditResult {
                 int n = 0;
-                for (auto& s : f.scripts) n += rewriteBlocks(s.blocks, key, oldName, newName);
+                for (const auto& kk : keys)
+                    for (auto& s : f.scripts) n += rewriteBlocks(s.blocks, kk, oldName, newName);
                 if (kind == "broadcast") {
                     for (auto& s : f.scripts)
                         if (s.hat == "broadcast" && s.hatArg == oldName) { s.hatArg = newName; ++n; }
@@ -331,13 +336,33 @@ EditResult sbcRename(const std::string& project, const std::string& kind,
             rm.broadcasts.insert(newName);
             touched = true;
         }
+        // 造型/声音登记在**角色级** meta 的 costumes/sounds 表里（RootMeta 没这两张表），
+        // 所以这里只处理根级；角色级由下面的 CharMeta 分支处理。
         if (touched) meta::writeRootMeta(metaPath, rm);
     };
     renameInMeta(root + "/meta.sbcli");
+    // 角色级 meta：costume/sound 的登记在 CharMeta.costumes/sounds
+    auto renameInCharMeta = [&](const std::string& metaPath, bool /*unused*/) {
+        if (!fs::exists(fs::u8path(metaPath), ec)) return;
+        if (kind != "costume" && kind != "sound") return;
+        meta::CharMeta cm = meta::loadCharMeta(metaPath);
+        auto& table = (kind == "costume") ? cm.costumes : cm.sounds;
+        auto it = table.find(oldName);
+        if (it == table.end()) return;
+        std::string rel = it->second;
+        table.erase(it);
+        table[newName] = rel;
+        std::string disp = cm.has("name") ? cm.get("name")
+                                          : meta::norm(fs::path(metaPath).parent_path().filename().u8string());
+        bool isStage = (low(meta::norm(fs::path(metaPath).parent_path().filename().u8string())) == "stage");
+        meta::writeCharMeta(metaPath, cm, disp, isStage);
+    };
     if (fs::is_directory(fs::u8path(chDir), ec)) {
         for (auto& e : fs::directory_iterator(fs::u8path(chDir), ec)) {
             if (!e.is_directory()) continue;
-            renameInMeta(e.path().u8string() + "/meta.sbcli");
+            std::string mp = e.path().u8string() + "/meta.sbcli";
+            renameInMeta(mp);
+            renameInCharMeta(mp, false);
         }
     }
 

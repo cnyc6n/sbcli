@@ -18,6 +18,8 @@
 
 #include <cstdint>
 #include <fstream>
+#include <functional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #ifdef _WIN32
@@ -976,6 +978,10 @@ bool sbcNeedsQuotes(const std::string& text) {
         if (isSpaceCh(c)) return true;
         if (isSpecial(c)) return true;
     }
+    // 非 ASCII（中文/日文…）不加引号虽然仍能解析，但可读性差且容易
+    // 和操作符混淆（如「得分」vs 变量名分隔），统一加引号。
+    for (unsigned char c : text)
+        if (c >= 0x80) return true;
     // 数字/布尔：引号会把它从"数字常量"变成"字符串"，语义就变了。
     // 判断依据是 token 原本是否带引号（quoted），不是内容——
     // 因为 MESSAGE="123" 这种"看起来是数字其实要当文本"的情况，
@@ -1018,7 +1024,18 @@ void valueText(std::ostringstream& os, const SbcValue& v) {
     }
 }
 
+// 注释回填表：块所在行号 → 紧邻其上的注释文本（不含 '#'）。
+// sbcUnparse 默认空（不输出注释）；sbcUnparseKeepComments 会填它。
+static const std::map<int, std::string>* g_leadingComments = nullptr;
+
 void blockText(std::ostringstream& os, const SbcBlock& b, int indent) {
+    // 回填该块上方的注释（如 unpack 为未知积木写的「# 未知积木: xxx」）。
+    // 只认"紧邻"的注释：parser 已把注释行跳过，这里按块行号 -1 查表。
+    if (g_leadingComments) {
+        auto it = g_leadingComments->find(b.line);
+        if (it != g_leadingComments->end())
+            os << std::string(indent, ' ') << "# " << it->second << "\n";
+    }
     os << std::string(indent, ' ') << b.opcode;
     for (const auto& p : b.params) {
         os << " " << p.key << "=";
@@ -1045,6 +1062,57 @@ void blockText(std::ostringstream& os, const SbcBlock& b, int indent) {
 }
 
 } // namespace
+
+// 收集源码里的注释：行号 → 文本；并建立「注释行紧邻的下一个块行号」映射。
+// 需要一个最小的"下一行是不是块"判断：直接看注释行 +1 是否在 blocks 行号集合里。
+std::map<int, std::string> sbcCollectComments(const std::string& src) {
+    std::map<int, std::string> raw;   // 行号 → 注释文本
+    {
+        std::istringstream is(src);
+        std::string line;
+        int no = 0;
+        while (std::getline(is, line)) {
+            ++no;
+            // 找第一个不在字符串里的 '#'
+            bool inStr = false;
+            size_t hash = std::string::npos;
+            for (size_t i = 0; i < line.size(); ++i) {
+                char c = line[i];
+                if (c == '"' && (i == 0 || line[i - 1] != '\\')) inStr = !inStr;
+                else if (c == '#' && !inStr) { hash = i; break; }
+            }
+            if (hash == std::string::npos) continue;
+            std::string body = line.substr(hash + 1);
+            while (!body.empty() && (body.front() == ' ' || body.front() == '\t')) body.erase(body.begin());
+            while (!body.empty() && (body.back() == ' ' || body.back() == '\r')) body.pop_back();
+            if (!body.empty()) raw[no] = body;
+        }
+    }
+    return raw;
+}
+
+std::string sbcUnparseKeepComments(const SbcFile& f, const std::string& src) {
+    // 收集所有块的行号，用于判断"注释是否紧邻某块"
+    std::set<int> blockLines;
+    std::function<void(const std::vector<SbcBlock>&)> walk = [&](const std::vector<SbcBlock>& bs) {
+        for (const auto& b : bs) {
+            if (b.line > 0) blockLines.insert(b.line);
+            for (const auto& sub : b.substacks) walk(sub);
+        }
+    };
+    for (const auto& s : f.scripts) walk(s.blocks);
+
+    std::map<int, std::string> raw = sbcCollectComments(src);
+    // 只保留"紧邻某块上方"的注释（否则对手工注释会全部堆到文件头）
+    std::map<int, std::string> leading;
+    for (const auto& kv : raw)
+        if (blockLines.count(kv.first + 1)) leading[kv.first + 1] = kv.second;
+
+    g_leadingComments = &leading;
+    std::string out = sbcUnparse(f);
+    g_leadingComments = nullptr;
+    return out;
+}
 
 std::string sbcUnparse(const SbcFile& f) {
     std::ostringstream os;

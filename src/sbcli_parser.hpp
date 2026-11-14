@@ -160,6 +160,8 @@ SbcFile sbcParseFile(const std::string& path);
 // AST → block.sbcli 文本（缩进统一 2 空格）。
 // 语义无损（再解析回来 AST 相同），但**不保留注释与原始空格**。
 std::string sbcUnparse(const SbcFile& f);
+// 同 sbcUnparse，但把 src 里「紧邻块上方」的注释回填进输出（编辑时保留注释）。
+std::string sbcUnparseKeepComments(const SbcFile& f, const std::string& src);
 
 std::string sbcTokensToText(const std::vector<SbToken>& toks);
 
